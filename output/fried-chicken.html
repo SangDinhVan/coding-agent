@@ -1,0 +1,829 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Crispy Chicken - Gà Rán Giòn Tan</title>
+<style>
+  :root {
+    --red: #e63946;
+    --red-dark: #c1121f;
+    --orange: #ff6b35;
+    --yellow: #ffd166;
+    --cream: #fff8f0;
+    --brown: #3d2b1f;
+    --text: #2b2118;
+    --muted: #7a6a5a;
+    --shadow: 0 10px 30px rgba(0, 0, 0, 0.12);
+    --radius: 16px;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+    color: var(--text);
+    background: var(--cream);
+    line-height: 1.6;
+    overflow-x: hidden;
+  }
+
+  img { max-width: 100%; display: block; }
+
+  .container { width: min(1100px, 92%); margin: 0 auto; }
+
+  /* ============ NAVBAR ============ */
+  header {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    background: rgba(255, 248, 240, 0.92);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid rgba(230, 57, 70, 0.12);
+  }
+  .nav {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 0;
+  }
+  .logo {
+    font-size: 1.5rem;
+    font-weight: 900;
+    color: var(--red);
+    text-decoration: none;
+    letter-spacing: -0.5px;
+  }
+  .logo span { color: var(--orange); }
+  .nav-links { display: flex; gap: 28px; list-style: none; }
+  .nav-links a {
+    text-decoration: none;
+    color: var(--text);
+    font-weight: 600;
+    font-size: 0.95rem;
+    transition: color 0.2s;
+  }
+  .nav-links a:hover { color: var(--red); }
+  .cart-btn {
+    background: var(--red);
+    color: #fff;
+    border: none;
+    padding: 10px 18px;
+    border-radius: 999px;
+    font-weight: 700;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    transition: background 0.2s, transform 0.1s;
+  }
+  .cart-btn:hover { background: var(--red-dark); }
+  .cart-btn:active { transform: scale(0.96); }
+  .cart-count {
+    background: #fff;
+    color: var(--red);
+    border-radius: 50%;
+    width: 22px;
+    height: 22px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.8rem;
+    font-weight: 900;
+  }
+
+  /* ============ HERO ============ */
+  .hero {
+    position: relative;
+    background: linear-gradient(135deg, #fff1e6 0%, #ffe0cc 50%, #ffd166 100%);
+    padding: 80px 0 100px;
+    overflow: hidden;
+  }
+  .hero::after {
+    content: "";
+    position: absolute;
+    width: 400px;
+    height: 400px;
+    background: rgba(230, 57, 70, 0.08);
+    border-radius: 50%;
+    top: -120px;
+    right: -80px;
+  }
+  .hero-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 40px;
+    align-items: center;
+    position: relative;
+    z-index: 2;
+  }
+  .hero h1 {
+    font-size: clamp(2.4rem, 5vw, 3.6rem);
+    line-height: 1.1;
+    margin-bottom: 18px;
+    color: var(--brown);
+  }
+  .hero h1 .highlight { color: var(--red); }
+  .hero p {
+    font-size: 1.15rem;
+    color: var(--muted);
+    margin-bottom: 28px;
+    max-width: 480px;
+  }
+  .btn {
+    display: inline-block;
+    padding: 14px 30px;
+    border-radius: 999px;
+    font-weight: 700;
+    text-decoration: none;
+    cursor: pointer;
+    border: none;
+    font-size: 1rem;
+    transition: transform 0.15s, box-shadow 0.2s, background 0.2s;
+  }
+  .btn-primary {
+    background: var(--red);
+    color: #fff;
+    box-shadow: 0 8px 20px rgba(230, 57, 70, 0.35);
+  }
+  .btn-primary:hover { background: var(--red-dark); transform: translateY(-2px); }
+  .btn-outline {
+    background: transparent;
+    color: var(--brown);
+    border: 2px solid var(--brown);
+    margin-left: 12px;
+  }
+  .btn-outline:hover { background: var(--brown); color: #fff; }
+  .hero-img {
+    position: relative;
+  }
+  .hero-img img {
+    border-radius: 24px;
+    box-shadow: var(--shadow);
+    transform: rotate(2deg);
+    transition: transform 0.4s;
+  }
+  .hero-img img:hover { transform: rotate(0) scale(1.02); }
+  .badge {
+    position: absolute;
+    background: #fff;
+    border-radius: 14px;
+    padding: 10px 16px;
+    box-shadow: var(--shadow);
+    font-weight: 700;
+    font-size: 0.9rem;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .badge-top { top: 20px; left: -20px; }
+  .badge-bottom { bottom: 24px; right: -14px; }
+
+  /* ============ FEATURES ============ */
+  .features {
+    padding: 70px 0;
+    background: #fff;
+  }
+  .features-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 24px;
+  }
+  .feature {
+    text-align: center;
+    padding: 28px 20px;
+    border-radius: var(--radius);
+    background: var(--cream);
+    transition: transform 0.2s, box-shadow 0.2s;
+  }
+  .feature:hover { transform: translateY(-6px); box-shadow: var(--shadow); }
+  .feature .icon {
+    font-size: 2.4rem;
+    margin-bottom: 12px;
+  }
+  .feature h3 { font-size: 1.05rem; margin-bottom: 6px; }
+  .feature p { font-size: 0.88rem; color: var(--muted); }
+
+  /* ============ MENU ============ */
+  .menu-section { padding: 80px 0; }
+  .section-head { text-align: center; margin-bottom: 48px; }
+  .section-head h2 {
+    font-size: clamp(1.9rem, 4vw, 2.6rem);
+    color: var(--brown);
+    margin-bottom: 10px;
+  }
+  .section-head p { color: var(--muted); max-width: 520px; margin: 0 auto; }
+  .menu-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 24px;
+  }
+  .card {
+    background: #fff;
+    border-radius: var(--radius);
+    overflow: hidden;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.06);
+    transition: transform 0.2s, box-shadow 0.2s;
+    display: flex;
+    flex-direction: column;
+  }
+  .card:hover { transform: translateY(-6px); box-shadow: var(--shadow); }
+  .card-img {
+    height: 170px;
+    background: linear-gradient(135deg, #ffe0cc, #ffd166);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 4.5rem;
+  }
+  .card-body { padding: 18px; display: flex; flex-direction: column; flex: 1; }
+  .card-body h3 { font-size: 1.1rem; margin-bottom: 4px; }
+  .card-body .desc { font-size: 0.86rem; color: var(--muted); flex: 1; }
+  .card-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 14px;
+  }
+  .price { font-weight: 900; font-size: 1.15rem; color: var(--red); }
+  .add-btn {
+    background: var(--orange);
+    color: #fff;
+    border: none;
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    font-size: 1.3rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.2s, transform 0.1s;
+  }
+  .add-btn:hover { background: var(--red); }
+  .add-btn:active { transform: scale(0.88); }
+
+  /* ============ ABOUT ============ */
+  .about {
+    background: var(--brown);
+    color: #f5e9dc;
+    padding: 80px 0;
+  }
+  .about-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 48px;
+    align-items: center;
+  }
+  .about h2 { font-size: clamp(1.9rem, 4vw, 2.5rem); margin-bottom: 16px; color: #fff; }
+  .about p { color: #d8c6b2; margin-bottom: 14px; }
+  .about-img {
+    background: linear-gradient(135deg, #e63946, #ff6b35);
+    border-radius: var(--radius);
+    height: 320px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 6rem;
+  }
+  .stats { display: flex; gap: 28px; margin-top: 24px; }
+  .stat h3 { font-size: 2rem; color: var(--yellow); }
+  .stat p { font-size: 0.85rem; color: #d8c6b2; }
+
+  /* ============ TESTIMONIALS ============ */
+  .testimonials { padding: 80px 0; background: #fff; }
+  .testi-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 24px;
+  }
+  .testi {
+    background: var(--cream);
+    padding: 26px;
+    border-radius: var(--radius);
+  }
+  .testi .stars { color: var(--yellow); font-size: 1.2rem; margin-bottom: 10px; }
+  .testi p { font-size: 0.95rem; color: var(--text); margin-bottom: 14px; }
+  .testi .author { font-weight: 700; font-size: 0.9rem; }
+  .testi .author span { color: var(--muted); font-weight: 400; }
+
+  /* ============ ORDER / CONTACT ============ */
+  .order { padding: 80px 0; }
+  .order-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 40px;
+    align-items: start;
+  }
+  .order-info h2 { font-size: clamp(1.9rem, 4vw, 2.5rem); color: var(--brown); margin-bottom: 14px; }
+  .order-info p { color: var(--muted); margin-bottom: 22px; }
+  .contact-item { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; font-weight: 600; }
+  .contact-item .icon { font-size: 1.4rem; }
+  .order-form {
+    background: #fff;
+    padding: 30px;
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+  }
+  .order-form h3 { margin-bottom: 18px; color: var(--brown); }
+  .form-group { margin-bottom: 16px; }
+  .form-group label { display: block; font-size: 0.88rem; font-weight: 600; margin-bottom: 6px; }
+  .form-group input, .form-group select, .form-group textarea {
+    width: 100%;
+    padding: 12px 14px;
+    border: 1.5px solid #e8ddd2;
+    border-radius: 10px;
+    font-size: 1rem;
+    font-family: inherit;
+    transition: border-color 0.2s;
+  }
+  .form-group input:focus, .form-group select:focus, .form-group textarea:focus {
+    outline: none;
+    border-color: var(--orange);
+  }
+  .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+
+  /* ============ FOOTER ============ */
+  footer {
+    background: var(--brown);
+    color: #d8c6b2;
+    text-align: center;
+    padding: 28px 0;
+    font-size: 0.9rem;
+  }
+  footer a { color: var(--yellow); text-decoration: none; }
+
+  /* ============ CART DRAWER ============ */
+  .cart-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 200;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s;
+  }
+  .cart-overlay.open { opacity: 1; pointer-events: auto; }
+  .cart-drawer {
+    position: fixed;
+    top: 0;
+    right: -420px;
+    width: min(400px, 100%);
+    height: 100vh;
+    background: #fff;
+    z-index: 201;
+    box-shadow: -10px 0 30px rgba(0, 0, 0, 0.2);
+    transition: right 0.35s cubic-bezier(0.22, 1, 0.36, 1);
+    display: flex;
+    flex-direction: column;
+  }
+  .cart-drawer.open { right: 0; }
+  .cart-header {
+    padding: 20px;
+    border-bottom: 1px solid #eee;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .cart-header h2 { font-size: 1.3rem; color: var(--brown); }
+  .close-btn {
+    background: none;
+    border: none;
+    font-size: 1.6rem;
+    cursor: pointer;
+    color: var(--muted);
+    line-height: 1;
+  }
+  .cart-items { flex: 1; overflow-y: auto; padding: 20px; }
+  .cart-item {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 12px 0;
+    border-bottom: 1px solid #f0ece7;
+  }
+  .cart-item .item-emoji { font-size: 2.2rem; }
+  .cart-item .item-info { flex: 1; }
+  .cart-item .item-info h4 { font-size: 0.95rem; }
+  .cart-item .item-info .item-price { color: var(--red); font-weight: 700; font-size: 0.9rem; }
+  .qty-controls { display: flex; align-items: center; gap: 8px; }
+  .qty-btn {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    border: 1.5px solid #e8ddd2;
+    background: #fff;
+    cursor: pointer;
+    font-weight: 700;
+    font-size: 1rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .qty-btn:hover { border-color: var(--red); color: var(--red); }
+  .remove-btn {
+    background: none;
+    border: none;
+    color: #c0392b;
+    cursor: pointer;
+    font-size: 0.8rem;
+    text-decoration: underline;
+  }
+  .cart-footer {
+    padding: 20px;
+    border-top: 1px solid #eee;
+  }
+  .cart-total {
+    display: flex;
+    justify-content: space-between;
+    font-size: 1.2rem;
+    font-weight: 900;
+    margin-bottom: 14px;
+    color: var(--brown);
+  }
+  .checkout-btn {
+    width: 100%;
+    padding: 14px;
+    background: var(--red);
+    color: #fff;
+    border: none;
+    border-radius: 999px;
+    font-weight: 700;
+    font-size: 1.05rem;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+  .checkout-btn:hover { background: var(--red-dark); }
+  .empty-cart {
+    text-align: center;
+    color: var(--muted);
+    padding: 40px 0;
+    font-size: 1.1rem;
+  }
+
+  /* ============ TOAST ============ */
+  .toast {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%) translateY(80px);
+    background: var(--brown);
+    color: #fff;
+    padding: 14px 24px;
+    border-radius: 999px;
+    font-weight: 600;
+    box-shadow: var(--shadow);
+    z-index: 300;
+    opacity: 0;
+    transition: transform 0.3s, opacity 0.3s;
+  }
+  .toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+
+  /* ============ RESPONSIVE ============ */
+  @media (max-width: 768px) {
+    .hero-grid, .about-grid, .order-grid { grid-template-columns: 1fr; }
+    .features-grid { grid-template-columns: repeat(2, 1fr); }
+    .testi-grid { grid-template-columns: 1fr; }
+    .nav-links { display: none; }
+    .badge-top { left: 0; }
+    .badge-bottom { right: 0; }
+    .form-row { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<!-- NAVBAR -->
+<header>
+  <div class="container nav">
+    <a href="#" class="logo">Crispy<span>Chicken</span> 🍗</a>
+    <ul class="nav-links">
+      <li><a href="#home">Trang chủ</a></li>
+      <li><a href="#menu">Thực đơn</a></li>
+      <li><a href="#about">Về chúng tôi</a></li>
+      <li><a href="#order">Đặt hàng</a></li>
+    </ul>
+    <button class="cart-btn" onclick="openCart()">
+      🛒 Giỏ hàng <span class="cart-count" id="cartCount">0</span>
+    </button>
+  </div>
+</header>
+
+<!-- HERO -->
+<section class="hero" id="home">
+  <div class="container hero-grid">
+    <div>
+      <h1>Gà rán <span class="highlight">giòn tan</span>, đậm đà khó cưỡng! 🍗</h1>
+      <p>Gà tươi mỗi ngày, tẩm ướp gia vị bí truyền 12 tiếng, chiên giòn vàng ruộm. Đặt ngay để nhận ưu đãi 20% cho đơn đầu tiên!</p>
+      <a href="#menu" class="btn btn-primary">Xem thực đơn</a>
+      <a href="#order" class="btn btn-outline">Đặt ngay</a>
+    </div>
+    <div class="hero-img">
+      <img src="https://images.unsplash.com/photo-1562967914-608f82629710?w=600&q=80" alt="Gà rán giòn">
+      <div class="badge badge-top">⭐ 4.9/5 - 2.000+ đánh giá</div>
+      <div class="badge badge-bottom">🚚 Giao nhanh 30 phút</div>
+    </div>
+  </div>
+</section>
+
+<!-- FEATURES -->
+<section class="features">
+  <div class="container features-grid">
+    <div class="feature">
+      <div class="icon">🐔</div>
+      <h3>Gà tươi 100%</h3>
+      <p>Nhập gà tươi mỗi sáng, không đông lạnh.</p>
+    </div>
+    <div class="feature">
+      <div class="icon">🔥</div>
+      <h3>Chiên giòn ngay</h3>
+      <p>Chiên khi bạn đặt, luôn nóng giòn.</p>
+    </div>
+    <div class="feature">
+      <div class="icon">🌶️</div>
+      <h3>Công thức bí truyền</h3>
+      <p>Gia vị độc quyền, đậm đà khó quên.</p>
+    </div>
+    <div class="feature">
+      <div class="icon">🚚</div>
+      <h3>Giao nhanh 30 phút</h3>
+      <p>Miễn phí giao hàng trong bán kính 3km.</p>
+    </div>
+  </div>
+</section>
+
+<!-- MENU -->
+<section class="menu-section" id="menu">
+  <div class="container">
+    <div class="section-head">
+      <h2>🍗 Thực đơn của chúng tôi</h2>
+      <p>Chọn món yêu thích và thêm vào giỏ hàng. Tất cả đều được chiên nóng hổi khi bạn đặt!</p>
+    </div>
+    <div class="menu-grid" id="menuGrid"></div>
+  </div>
+</section>
+
+<!-- ABOUT -->
+<section class="about" id="about">
+  <div class="container about-grid">
+    <div>
+      <h2>Câu chuyện về Crispy Chicken</h2>
+      <p>Bắt đầu từ một quán nhỏ ven đường năm 2015, chúng tôi đã phục vụ hơn 1 triệu phần gà rán với một niềm tin đơn giản: <strong>gà ngon phải giòn bên ngoài, mọng nước bên trong.</strong></p>
+      <p>Mỗi miếng gà đều được tẩm ướp 12 tiếng với 14 loại gia vị, sau đó chiên ở nhiệt độ hoàn hảo để giữ trọn hương vị.</p>
+      <div class="stats">
+        <div class="stat"><h3>9+</h3><p>Năm kinh nghiệm</p></div>
+        <div class="stat"><h3>1M+</h3><p>Phần gà đã bán</p></div>
+        <div class="stat"><h3>15</h3><p>Chi nhánh</p></div>
+      </div>
+    </div>
+    <div class="about-img">🍗🔥</div>
+  </div>
+</section>
+
+<!-- TESTIMONIALS -->
+<section class="testimonials">
+  <div class="container">
+    <div class="section-head">
+      <h2>Khách hàng nói gì?</h2>
+      <p>Hơn 2.000 đánh giá 5 sao từ những thực khách khó tính nhất.</p>
+    </div>
+    <div class="testi-grid">
+      <div class="testi">
+        <div class="stars">⭐⭐⭐⭐⭐</div>
+        <p>"Gà giòn rụm, thịt mềm ngọt, nước chấm ngon xuất sắc. Giao hàng nhanh hơn mình tưởng!"</p>
+        <div class="author">Minh Anh <span>· Quận 1</span></div>
+      </div>
+      <div class="testi">
+        <div class="stars">⭐⭐⭐⭐⭐</div>
+        <p>"Đặt cho cả công ty, ai cũng khen. Combo tiết kiệm mà đầy đặn, sẽ ủng hộ dài dài."</p>
+        <div class="author">Tuấn Hưng <span>· Quận 7</span></div>
+      </div>
+      <div class="testi">
+        <div class="stars">⭐⭐⭐⭐⭐</div>
+        <p>"Vị cay đúng chất, không bị ngấy. Cánh gà giòn tan ăn là ghiền. 10 điểm không có nhưng!"</p>
+        <div class="author">Thu Hà <span>· Quận 3</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ORDER -->
+<section class="order" id="order">
+  <div class="container order-grid">
+    <div class="order-info">
+      <h2>Đặt hàng ngay hôm nay</h2>
+      <p>Điền thông tin bên dưới, chúng tôi sẽ gọi xác nhận và giao hàng trong 30 phút. Hoặc liên hệ trực tiếp:</p>
+      <div class="contact-item"><span class="icon">📞</span> 1900 1234 (Hotline miễn phí)</div>
+      <div class="contact-item"><span class="icon">📍</span> 123 Đường Gà Rán, Quận 1, TP.HCM</div>
+      <div class="contact-item"><span class="icon">🕐</span> Mở cửa: 09:00 - 22:00 hàng ngày</div>
+      <div class="contact-item"><span class="icon">📧</span> hello@crispychicken.vn</div>
+    </div>
+    <form class="order-form" onsubmit="handleOrder(event)">
+      <h3>📝 Thông tin đặt hàng</h3>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Tên của bạn</label>
+          <input type="text" required placeholder="Nguyễn Văn A">
+        </div>
+        <div class="form-group">
+          <label>Số điện thoại</label>
+          <input type="tel" required placeholder="09xx xxx xxx">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Địa chỉ giao hàng</label>
+        <input type="text" required placeholder="Số nhà, đường, quận...">
+      </div>
+      <div class="form-group">
+        <label>Món muốn đặt</label>
+        <select id="orderItem"></select>
+      </div>
+      <div class="form-group">
+        <label>Ghi chú</label>
+        <textarea rows="3" placeholder="Ví dụ: cho thêm tương ớt, không hành..."></textarea>
+      </div>
+      <button type="submit" class="btn btn-primary" style="width:100%">Đặt hàng 🍗</button>
+    </form>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <div class="container">
+    <p>© 2025 Crispy Chicken. All rights reserved.</p>
+    <p>Made with ❤️ & 🍗 · <a href="#home">Về đầu trang</a></p>
+  </div>
+</footer>
+
+<!-- CART DRAWER -->
+<div class="cart-overlay" id="cartOverlay" onclick="closeCart()"></div>
+<div class="cart-drawer" id="cartDrawer">
+  <div class="cart-header">
+    <h2>🛒 Giỏ hàng của bạn</h2>
+    <button class="close-btn" onclick="closeCart()">✕</button>
+  </div>
+  <div class="cart-items" id="cartItems"></div>
+  <div class="cart-footer" id="cartFooter">
+    <div class="cart-total">
+      <span>Tổng cộng:</span>
+      <span id="cartTotal">0đ</span>
+    </div>
+    <button class="checkout-btn" onclick="checkout()">Thanh toán</button>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div class="toast" id="toast"></div>
+
+<script>
+  // ====== DỮ LIỆU MÓN ĂN ======
+  const products = [
+    { id: 1, name: "Gà rán truyền thống", emoji: "🍗", desc: "Đùi gà chiên giòn, đậm đà gia vị bí truyền.", price: 35000 },
+    { id: 2, name: "Cánh gà cay Hàn Quốc", emoji: "🌶️", desc: "Cánh gà sốt cay ngọt kiểu Hàn, phủ mè rang.", price: 45000 },
+    { id: 3, name: "Gà giòn không xương", emoji: "🍖", desc: "Miếng gà không xương tiện lợi, giòn rụm.", price: 55000 },
+    { id: 4, name: "Combo gia đình", emoji: "👨‍👩‍👧", desc: "6 miếng gà + 2 khoai tây chiên + 2 nước ngọt.", price: 199000 },
+    { id: 5, name: "Khoai tây chiên", emoji: "🍟", desc: "Khoai tây cắt dày, chiên giòn vàng ươm.", price: 25000 },
+    { id: 6, name: "Burger gà giòn", emoji: "🍔", desc: "Bánh burger kẹp gà giòn, rau tươi, sốt đặc biệt.", price: 49000 },
+    { id: 7, name: "Gà viên chiên", emoji: "🍢", desc: "Gà viên mềm ngọt, chấm sốt chua ngọt.", price: 39000 },
+    { id: 8, name: "Nước ngọt các loại", emoji: "🥤", desc: "Coca, Pepsi, 7Up, nước cam ép tươi.", price: 15000 },
+  ];
+
+  // ====== GIỎ HÀNG ======
+  let cart = JSON.parse(localStorage.getItem('chickenCart') || '[]');
+
+  function saveCart() {
+    localStorage.setItem('chickenCart', JSON.stringify(cart));
+    updateCartUI();
+  }
+
+  function addToCart(id) {
+    const existing = cart.find(item => item.id === id);
+    if (existing) {
+      existing.qty += 1;
+    } else {
+      const p = products.find(p => p.id === id);
+      cart.push({ id: p.id, name: p.name, emoji: p.emoji, price: p.price, qty: 1 });
+    }
+    saveCart();
+    showToast('Đã thêm vào giỏ hàng! 🍗');
+  }
+
+  function changeQty(id, delta) {
+    const item = cart.find(i => i.id === id);
+    if (!item) return;
+    item.qty += delta;
+    if (item.qty <= 0) cart = cart.filter(i => i.id !== id);
+    saveCart();
+  }
+
+  function removeItem(id) {
+    cart = cart.filter(i => i.id !== id);
+    saveCart();
+  }
+
+  function cartTotal() {
+    return cart.reduce((sum, i) => sum + i.price * i.qty, 0);
+  }
+
+  function formatPrice(n) {
+    return n.toLocaleString('vi-VN') + 'đ';
+  }
+
+  function updateCartUI() {
+    const count = cart.reduce((s, i) => s + i.qty, 0);
+    document.getElementById('cartCount').textContent = count;
+
+    const itemsEl = document.getElementById('cartItems');
+    const footerEl = document.getElementById('cartFooter');
+
+    if (cart.length === 0) {
+      itemsEl.innerHTML = '<div class="empty-cart">🛒 Giỏ hàng đang trống<br>Hãy thêm món ngon nhé!</div>';
+      footerEl.style.display = 'none';
+    } else {
+      footerEl.style.display = 'block';
+      itemsEl.innerHTML = cart.map(item => `
+        <div class="cart-item">
+          <div class="item-emoji">${item.emoji}</div>
+          <div class="item-info">
+            <h4>${item.name}</h4>
+            <div class="item-price">${formatPrice(item.price)}</div>
+            <button class="remove-btn" onclick="removeItem(${item.id})">Xóa</button>
+          </div>
+          <div class="qty-controls">
+            <button class="qty-btn" onclick="changeQty(${item.id}, -1)">−</button>
+            <span>${item.qty}</span>
+            <button class="qty-btn" onclick="changeQty(${item.id}, 1)">+</button>
+          </div>
+        </div>
+      `).join('');
+      document.getElementById('cartTotal').textContent = formatPrice(cartTotal());
+    }
+  }
+
+  function openCart() {
+    document.getElementById('cartDrawer').classList.add('open');
+    document.getElementById('cartOverlay').classList.add('open');
+  }
+
+  function closeCart() {
+    document.getElementById('cartDrawer').classList.remove('open');
+    document.getElementById('cartOverlay').classList.remove('open');
+  }
+
+  function checkout() {
+    if (cart.length === 0) return;
+    showToast('Cảm ơn bạn! Đơn hàng đã được ghi nhận. 🎉');
+    cart = [];
+    saveCart();
+    closeCart();
+  }
+
+  // ====== TOAST ======
+  let toastTimer;
+  function showToast(msg) {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => t.classList.remove('show'), 2200);
+  }
+
+  // ====== RENDER MENU ======
+  function renderMenu() {
+    document.getElementById('menuGrid').innerHTML = products.map(p => `
+      <div class="card">
+        <div class="card-img">${p.emoji}</div>
+        <div class="card-body">
+          <h3>${p.name}</h3>
+          <p class="desc">${p.desc}</p>
+          <div class="card-footer">
+            <span class="price">${formatPrice(p.price)}</span>
+            <button class="add-btn" onclick="addToCart(${p.id})" title="Thêm vào giỏ">+</button>
+          </div>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  // ====== FILL ORDER SELECT ======
+  function fillOrderSelect() {
+    const sel = document.getElementById('orderItem');
+    sel.innerHTML = products.map(p => `<option value="${p.name}">${p.name} - ${formatPrice(p.price)}</option>`).join('');
+  }
+
+  // ====== ORDER FORM ======
+  function handleOrder(e) {
+    e.preventDefault();
+    showToast('Đặt hàng thành công! Chúng tôi sẽ gọi xác nhận ngay. 📞');
+    e.target.reset();
+  }
+
+  // ====== INIT ======
+  renderMenu();
+  fillOrderSelect();
+  updateCartUI();
+</script>
+</body>
+</html>
