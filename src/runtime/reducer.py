@@ -206,6 +206,7 @@ def reduce_event(state: RuntimeState, event: dict) -> RuntimeState:
             execution.status = ToolExecutionStatus.RUNNING
             execution.started_at = ts
             execution.recovery_metadata.update(payload.get("recovery_metadata", {}))
+            execution.recovery_metadata["_started_runtime_instance_id"] = event["runtime_instance_id"]
         elif kind == "ToolCompleted":
             if execution.status not in {ToolExecutionStatus.RUNNING, ToolExecutionStatus.RECOVERY_REQUIRED}:
                 raise ValueError("tool cannot complete from current state")
@@ -253,7 +254,7 @@ def reduce_event(state: RuntimeState, event: dict) -> RuntimeState:
     return state
 
 
-def replay(events: Iterable[dict]) -> RuntimeState:
+def replay(events: Iterable[dict], current_runtime_instance_id: str | None = None) -> RuntimeState:
     materialized = list(events)
     session_id = next((event.get("session_id") for event in materialized if event.get("session_id")), "legacy")
     state = RuntimeState(session_id=session_id)
@@ -263,7 +264,10 @@ def replay(events: Iterable[dict]) -> RuntimeState:
         except (KeyError, TypeError, ValueError) as error:
             raise JournalCorruptionError(f"invalid historical transition at seq {event.get('seq')}: {error}") from error
     for execution in state.executions.values():
-        if execution.status == ToolExecutionStatus.RUNNING:
+        started_instance = execution.recovery_metadata.get("_started_runtime_instance_id")
+        if execution.status == ToolExecutionStatus.RUNNING and (
+            current_runtime_instance_id is None or started_instance != current_runtime_instance_id
+        ):
             execution.status = ToolExecutionStatus.RECOVERY_REQUIRED
     return state
 

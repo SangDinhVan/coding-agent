@@ -51,6 +51,10 @@ class BaseTool(ABC):
 
         return None
 
+    def recovery_metadata(self, **kwargs: Any) -> dict[str, Any]:
+        """Return facts persisted before a side effect; empty for non-reconcilable tools."""
+        return {}
+
     def run(self, **kwargs: Any) -> ToolResult:
         """
         Entry point duy nhất mà agent.py nên gọi (KHÔNG gọi thẳng execute()).

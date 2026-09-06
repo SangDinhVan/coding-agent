@@ -15,8 +15,8 @@ from memory.event_store import EventStore
 from memory.manager import MemoryManager
 from model import llm
 from runtime.executor import ToolExecutor
-from runtime.models import CompletionPolicy, PlanMode, PlanStepStatus, ToolExecutionStatus, TurnStatus
-from runtime.reducer import completion_blockers, replay, runtime_prompt_projection
+from runtime.models import CompletionPolicy, PlanMode, PlanStepStatus, RecoveryDecision, ToolExecutionStatus, TurnStatus
+from runtime.reducer import completion_blockers, pending_runtime_actions, replay, runtime_prompt_projection
 from tools import registry
 from tools.base import ToolResult
 from tools.plan import UpdatePlanTool
@@ -82,7 +82,7 @@ class Agent:
         self.memory_manager = MemoryManager(model=model)
         self.compactor = Compactor(model=model)
         self.workspace_state = WorkspaceState(cwd=workdir)
-        self.runtime_state = replay(self.event_store.read_all())
+        self.runtime_state = replay(self.event_store.read_all(), current_runtime_instance_id=self.event_store.runtime_instance_id)
         self.turn_state = self._latest_turn()
         self.plan_tool = UpdatePlanTool(self._apply_plan_action)
         self.tool_executor = ToolExecutor(
@@ -101,7 +101,7 @@ class Agent:
         return list(self.runtime_state.turns.values())[-1]
 
     def _refresh(self) -> None:
-        self.runtime_state = replay(self.event_store.read_all())
+        self.runtime_state = replay(self.event_store.read_all(), current_runtime_instance_id=self.event_store.runtime_instance_id)
         self.turn_state = self._latest_turn()
 
     def _event(self, event_type, aggregate_type, aggregate_id, payload, *, turn_id=None, causation_id=None):
@@ -189,6 +189,31 @@ class Agent:
             },
             turn_id=turn_id,
         )
+        return self._drive_turn(turn_id, max_iterations)
+
+    def pending_runtime_actions(self):
+        return pending_runtime_actions(self.runtime_state)
+
+    def resolve_recovery(self, execution_id: str, decision: RecoveryDecision, note: str) -> None:
+        self.tool_executor.resolve_recovery(execution_id, decision, note)
+        self._refresh()
+
+    def resume_active_turn(self, max_iterations: int = 20) -> str:
+        turn_id = self.runtime_state.active_turn_id
+        if turn_id is None:
+            raise RuntimeError("No active turn to resume")
+        if self.pending_runtime_actions():
+            raise RuntimeError("Resolve pending approval or recovery before resuming")
+        final_events = [
+            event for event in self.event_store.read_all()
+            if event.get("event_type") == "AssistantMessageRecorded"
+            and event.get("turn_id") == turn_id
+            and event.get("payload", {}).get("final")
+        ]
+        if final_events:
+            final_text = final_events[-1]["payload"].get("content", "")
+            self._event("TurnCompleted", "turn", turn_id, {"final_text": final_text}, turn_id=turn_id)
+            return final_text
         return self._drive_turn(turn_id, max_iterations)
 
     def _drive_turn(self, turn_id: str, max_iterations: int) -> str:

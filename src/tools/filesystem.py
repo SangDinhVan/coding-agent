@@ -1,8 +1,17 @@
+import hashlib
 from pathlib import Path
 from tools.base import BaseTool, ToolResult
 from runtime.models import ReplayPolicy
 
 COMPACT_PREVIEW_LINES = 50
+
+
+def _hash_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _before_hash(path: Path) -> str:
+    return _hash_bytes(path.read_bytes()) if path.exists() else "__missing__"
 
 
 class ReadTool(BaseTool):
@@ -95,6 +104,14 @@ class WriteTool(BaseTool):
             "required": ["path", "content"],
         }
 
+    def recovery_metadata(self, path: str, content: str, **kwargs) -> dict:
+        file_path = Path(path)
+        return {
+            "path": str(file_path),
+            "before_hash": _before_hash(file_path),
+            "expected_after_hash": _hash_bytes(content.encode("utf-8")),
+        }
+
     def execute(self, path: str, content: str, **kwargs) -> ToolResult:
         try:
             file_path = Path(path)
@@ -142,6 +159,18 @@ class EditTool(BaseTool):
                 },
             },
             "required": ["path", "old_string", "new_string"],
+        }
+
+    def recovery_metadata(self, path: str, old_string: str, new_string: str, **kwargs) -> dict:
+        file_path = Path(path)
+        content = file_path.read_text(encoding="utf-8")
+        if content.count(old_string) != 1:
+            return {}
+        expected = content.replace(old_string, new_string, 1).encode("utf-8")
+        return {
+            "path": str(file_path),
+            "before_hash": _hash_bytes(content.encode("utf-8")),
+            "expected_after_hash": _hash_bytes(expected),
         }
 
     def execute(self, path: str, old_string: str, new_string: str, **kwargs) -> ToolResult:
