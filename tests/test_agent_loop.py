@@ -9,8 +9,15 @@ from tests.fakes import FakeTool, stream_text, stream_tool_call
 
 
 class AgentLoopCharacterizationTests(unittest.TestCase):
+    def setUp(self):
+        memory_update = patch.object(Agent, "_update_memory_bg", return_value=None)
+        memory_update.start()
+        self.addCleanup(memory_update.stop)
+
     def agent(self, directory: str) -> Agent:
-        return Agent(str(Path(directory) / "events.jsonl"), workdir=directory)
+        agent = Agent(str(Path(directory) / "events.jsonl"), workdir=directory)
+        self.addCleanup(agent.event_store.close)
+        return agent
 
     def test_direct_text_completes_and_is_persisted(self):
         with tempfile.TemporaryDirectory() as directory:
