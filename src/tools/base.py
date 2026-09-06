@@ -2,6 +2,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from runtime.models import ReplayPolicy
+
 
 @dataclass(frozen=True)
 class ToolResult:
@@ -22,6 +24,7 @@ class ToolResult:
 
 class BaseTool(ABC):
 
+    replay_policy: ReplayPolicy = ReplayPolicy.MANUAL
     name: str
     description: str
     parameters: dict  

@@ -10,6 +10,7 @@ phần này CHƯA làm, tool hiện tại chạy trực tiếp trên máy host, 
 
 import subprocess
 from tools.base import BaseTool, ToolResult
+from runtime.models import ReplayPolicy
 
 DEFAULT_TIMEOUT_SECONDS = 60
 
@@ -19,6 +20,7 @@ COMPACT_MAX_CHARS = 2000
 
 
 class BashTool(BaseTool):
+    replay_policy = ReplayPolicy.MANUAL
     def __init__(self):
         self.name = "bash"
         self.description = (

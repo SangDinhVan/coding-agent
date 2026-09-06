@@ -1,10 +1,12 @@
 from pathlib import Path
 from tools.base import BaseTool, ToolResult
+from runtime.models import ReplayPolicy
 
 COMPACT_PREVIEW_LINES = 50
 
 
 class ReadTool(BaseTool):
+    replay_policy = ReplayPolicy.REPLAY_SAFE
     def __init__(self):
         self.name = "read"
         self.description = (
@@ -71,6 +73,7 @@ class ReadTool(BaseTool):
 
 
 class WriteTool(BaseTool):
+    replay_policy = ReplayPolicy.RECONCILABLE
     def __init__(self):
         self.name = "write"
         self.description = (
@@ -113,6 +116,7 @@ class WriteTool(BaseTool):
 
 
 class EditTool(BaseTool):
+    replay_policy = ReplayPolicy.RECONCILABLE
     def __init__(self):
         self.name = "edit"
         self.description = (
