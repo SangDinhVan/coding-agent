@@ -110,3 +110,36 @@ class EventStoreTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class StrictJournalTests(unittest.TestCase):
+    def test_duplicate_event_id_with_increasing_seq_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "session.jsonl"
+            base = {
+                "schema_version": 1, "event_id": "same", "seq": 1, "ts": "2026-01-01T00:00:00Z",
+                "session_id": "s", "runtime_instance_id": "r", "event_type": "TurnStarted",
+                "aggregate_type": "turn", "aggregate_id": "t", "turn_id": "t",
+                "causation_id": None, "correlation_id": "t", "payload": {"goal": "x"},
+            }
+            path.write_text(json.dumps(base) + "\n" + json.dumps({**base, "seq": 2, "event_type": "TurnCompleted"}) + "\n", encoding="utf-8")
+            with self.assertRaisesRegex(JournalCorruptionError, "duplicate event ID"):
+                EventStore(path)
+
+    def test_secret_is_absent_from_raw_journal_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "session.jsonl"
+            with EventStore(path) as store:
+                store.append_event("ToolRequested", "tool_execution", "x", {"arguments": {"token": "never-write-this"}})
+            self.assertNotIn("never-write-this", path.read_text(encoding="utf-8"))
+
+class ToolCallRedactionTests(unittest.TestCase):
+    def test_secret_inside_tool_call_argument_json_is_redacted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "session.jsonl"
+            with EventStore(path) as store:
+                store.append("assistant", None, tool_calls=[{
+                    "id": "c", "type": "function", "function": {"name": "fake", "arguments": '{"token":"never-write-this","path":"ok"}'},
+                }])
+            contents = path.read_text(encoding="utf-8")
+            self.assertNotIn("never-write-this", contents)
+            self.assertIn("[REDACTED]", contents)

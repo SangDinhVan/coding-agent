@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from datetime import datetime, timezone
 from typing import Callable
 from uuid import uuid4
 
@@ -13,6 +12,18 @@ from memory.event_store import EventStore
 from runtime.models import ApprovalDecision, ApprovalRequest, PolicyDecision, RecoveryDecision, ReplayPolicy, ToolExecutionStatus
 from runtime.reducer import replay
 from tools.base import BaseTool, ToolResult
+
+
+
+def _walk_values(value):
+    if isinstance(value, dict):
+        for item in value.values():
+            yield from _walk_values(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _walk_values(item)
+    else:
+        yield value
 
 
 def _error(message: str) -> ToolResult:
@@ -32,6 +43,7 @@ class ToolExecutor:
         self.get_tool = get_tool
         self.policy = policy or (lambda execution: PolicyDecision.ALLOW)
         self.approval_handler = approval_handler
+        self._transient_arguments: dict[str, dict] = {}
 
     def request_batch(self, tool_calls: list, turn_id: str) -> list[str]:
         execution_ids = []
@@ -42,8 +54,11 @@ class ToolExecutor:
             replay_policy = tool.replay_policy if tool else ReplayPolicy.MANUAL
             try:
                 arguments = json.loads(tool_call.function.arguments)
-            except (json.JSONDecodeError, TypeError):
+                parse_error = None
+            except (json.JSONDecodeError, TypeError) as error:
                 arguments = {}
+                parse_error = str(error)
+            self._transient_arguments[execution_id] = arguments
             self.store.append_event(
                 "ToolRequested",
                 "tool_execution",
@@ -52,7 +67,7 @@ class ToolExecutor:
                     "tool_call_id": tool_call.id,
                     "tool_name": tool_call.function.name,
                     "arguments": arguments,
-                    "raw_arguments": tool_call.function.arguments,
+                    "parse_error": parse_error,
                     "replay_policy": replay_policy.value,
                     "attempt": 0,
                 },
@@ -68,17 +83,20 @@ class ToolExecutor:
         if execution.status != ToolExecutionStatus.PENDING:
             return _error(f"execution {execution_id} is already {execution.status.value}")
         tool = self.get_tool(execution.tool_name)
-        raw_arguments = next(
-            event["payload"].get("raw_arguments", "{}")
+        requested = next(
+            event["payload"]
             for event in self.store.read_all()
             if event.get("aggregate_id") == execution_id and event.get("event_type") == "ToolRequested"
         )
         if tool is None:
             return self._fail(execution, f"Unknown tool: {execution.tool_name}", "unknown_tool")
-        try:
-            arguments = json.loads(raw_arguments)
-        except (json.JSONDecodeError, TypeError):
+        if requested.get("parse_error"):
             return self._fail(execution, "tool call arguments are not valid JSON", "invalid_json")
+        arguments = self._transient_arguments.get(execution_id)
+        if arguments is None:
+            arguments = execution.arguments
+            if any(value == "[REDACTED]" for value in _walk_values(arguments)):
+                return self._fail(execution, "redacted arguments cannot be replayed after restart", "redacted_arguments")
         validation_error = tool.validate(arguments)
         if validation_error:
             return self._fail(execution, validation_error, "validation")
@@ -87,7 +105,7 @@ class ToolExecutor:
             turn_id=execution.turn_id, correlation_id=execution.turn_id,
         )
         execution = replay(self.store.read_all(), current_runtime_instance_id=self.store.runtime_instance_id).executions[execution_id]
-        decision = PolicyDecision(self.policy(execution))
+        decision = PolicyDecision.ALLOW if execution.approval and execution.approval.approved else PolicyDecision(self.policy(execution))
         if decision == PolicyDecision.DENY:
             self.store.append_event(
                 "ToolCancelled", "tool_execution", execution_id, {"reason": "policy denied"},
@@ -135,6 +153,29 @@ class ToolExecutor:
             turn_id=execution.turn_id, correlation_id=execution.turn_id,
         )
         return result
+
+    def resolve_approval(
+        self,
+        execution_id: str,
+        approved: bool,
+        note: str,
+        approved_by: str = "user",
+    ) -> ToolResult:
+        if not note.strip():
+            raise ValueError("approval decision requires a note")
+        state = replay(self.store.read_all())
+        execution = state.executions.get(execution_id)
+        if execution is None or execution.status != ToolExecutionStatus.WAITING_APPROVAL:
+            raise ValueError("execution is not waiting for approval")
+        event_type = "ToolApproved" if approved else "ToolRejected"
+        self.store.append_event(
+            event_type, "tool_execution", execution_id,
+            {"approved_by": approved_by, "note": note},
+            turn_id=execution.turn_id, correlation_id=execution.turn_id,
+        )
+        if not approved:
+            return _error("tool execution rejected by user")
+        return self.execute(execution_id)
 
     def resolve_recovery(
         self,

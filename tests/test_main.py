@@ -38,3 +38,11 @@ class MainTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class ApprovalCliTests(unittest.TestCase):
+    def test_waiting_approval_is_resolved_before_repl(self):
+        agent = MagicMock()
+        agent.pending_runtime_actions.return_value = [PendingRuntimeAction("approval", "execution-1", "write", "policy")]
+        choices = iter(["approve", "reviewed"])
+        handle_pending_runtime_actions(agent, input_fn=lambda prompt: next(choices), print_fn=lambda text: None)
+        agent.resolve_approval.assert_called_once()

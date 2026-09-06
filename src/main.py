@@ -52,7 +52,12 @@ def handle_pending_runtime_actions(agent, input_fn=input, print_fn=print) -> Non
         execution = agent.runtime_state.executions[action.execution_id]
         print_fn(f"[{action.kind}] {action.execution_id[:8]} {action.tool_name}: {action.message}")
         if action.kind == "approval":
-            print_fn("Approval must be resolved by the configured approval handler.")
+            while True:
+                choice = input_fn("Approval decision (approve/reject): ").strip().lower()
+                if choice in {"approve", "reject"}:
+                    break
+            note = input_fn("Approval note: ").strip()
+            agent.resolve_approval(action.execution_id, choice == "approve", note)
             continue
         allowed = [RecoveryDecision.COMPLETED, RecoveryDecision.FAILED]
         if execution.replay_policy != ReplayPolicy.MANUAL:

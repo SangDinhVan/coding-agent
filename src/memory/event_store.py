@@ -43,6 +43,11 @@ def _utc_now() -> str:
 def _redact(value: Any, key: str | None = None) -> Any:
     if key is not None and key.lower() in _SECRET_KEYS:
         return "[REDACTED]"
+    if key == "arguments" and isinstance(value, str):
+        try:
+            return json.dumps(_redact(json.loads(value)), ensure_ascii=False, separators=(",", ":"))
+        except json.JSONDecodeError:
+            return value
     if isinstance(value, dict):
         return {item_key: _redact(item, item_key) for item_key, item in value.items()}
     if isinstance(value, list):

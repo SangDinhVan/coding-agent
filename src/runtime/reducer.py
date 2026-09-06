@@ -147,6 +147,11 @@ def reduce_event(state: RuntimeState, event: dict) -> RuntimeState:
             allowed, target = transitions[kind]
             if step.status not in allowed:
                 raise ValueError("invalid plan step transition")
+            if target == PlanStepStatus.IN_PROGRESS and any(
+                item.status == PlanStepStatus.IN_PROGRESS and item.step_id != step_id
+                for item in current.steps
+            ):
+                raise ValueError("only one plan step can be in_progress")
             step.status = target
             step.note = payload.get("note")
             step.evidence_execution_ids = list(payload.get("evidence_execution_ids", []))
@@ -251,6 +256,16 @@ def reduce_event(state: RuntimeState, event: dict) -> RuntimeState:
         turn = state.turns.get(event.get("turn_id"))
         if turn and kind in {"ToolCompleted", "ToolFailed", "ToolRejected", "ToolCancelled", "ToolRecoveredAsCompleted", "ToolRecoveredAsFailed"}:
             turn.completion_block_count = 0
+    known_noop_events = {
+        "UserMessageRecorded", "AssistantToolCallsRecorded", "ToolMessageRecorded",
+        "AssistantMessageRecorded", "CompletionRequested",
+    }
+    if kind not in known_noop_events and not (
+        kind in {"TurnStarted", "TurnIterationAdvanced", "CompletionBlocked", "TurnCompleted", "TurnInterrupted", "TurnFailed"}
+        or kind in {"PlanCreated", "PlanRevised", "PlanStepStarted", "PlanStepCompleted", "PlanStepFailed", "PlanStepSkipped"}
+        or kind in {"ToolRequested", "ToolValidated", "ToolApprovalRequested", "ToolApproved", "ToolRejected", "ToolStarted", "ToolCompleted", "ToolFailed", "ToolCancelled", "ToolRecoveryRequired", "ToolRecoveredAsCompleted", "ToolRecoveredAsFailed", "ToolRetryScheduled"}
+    ):
+        raise ValueError(f"unknown event type: {kind}")
     return state
 
 

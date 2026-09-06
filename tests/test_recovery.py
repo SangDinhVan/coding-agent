@@ -98,3 +98,58 @@ class RecoveryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class ApprovalProgressTests(RecoveryTests):
+    def test_waiting_approval_blocks_model_progress(self):
+        agent = Agent(
+            str(self.path),
+            workdir=self.directory.name,
+            policy=lambda execution: "ask",
+            approval_handler=None,
+        )
+        self.addCleanup(agent.close)
+        fake = FakeTool()
+        responses = [iter([SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content=None, tool_calls=[SimpleNamespace(index=0, id="c", type="function", function=SimpleNamespace(name="fake", arguments="{}"))]))])]), stream_text("must not happen")]
+        with patch("agent.loop.registry.get_tool", return_value=fake), patch("agent.loop.llm.complete", side_effect=responses) as complete:
+            self.assertEqual(agent.run_turn("g"), "")
+        self.assertEqual(complete.call_count, 1)
+        self.assertEqual(fake.calls, 0)
+
+class BatchResumeTests(RecoveryTests):
+    def test_resume_drains_pending_batch_before_model_progress(self):
+        agent = Agent(
+            str(self.path), workdir=self.directory.name,
+            policy=lambda execution: "ask" if execution.tool_call_id == "c1" else "allow",
+            approval_handler=None,
+        )
+        self.addCleanup(agent.close)
+        fake = FakeTool()
+        first_response = iter([
+            SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content=None, tool_calls=[
+                SimpleNamespace(index=0, id="c1", type="function", function=SimpleNamespace(name="fake", arguments="{}")),
+                SimpleNamespace(index=1, id="c2", type="function", function=SimpleNamespace(name="fake", arguments="{}")),
+            ]))])
+        ])
+        with patch("agent.loop.registry.get_tool", return_value=fake), patch("agent.loop.llm.complete", return_value=first_response):
+            agent.run_turn("g")
+        approval = agent.pending_runtime_actions()[0]
+        with patch("agent.loop.registry.get_tool", return_value=fake):
+            agent.resolve_approval(approval.execution_id, True, "approved")
+        with patch("agent.loop.registry.get_tool", return_value=fake), patch("agent.loop.llm.complete", return_value=stream_text("done")) as complete:
+            agent.resume_active_turn()
+        self.assertEqual(fake.calls, 2)
+        self.assertEqual(complete.call_count, 1)
+        tool_messages = [m for m in agent.event_store.to_messages() if m["role"] == "tool"]
+        self.assertEqual([m["tool_call_id"] for m in tool_messages], ["c1", "c2"])
+
+    def test_persisted_final_completes_without_model_call(self):
+        first = Agent(str(self.path), workdir=self.directory.name)
+        first.event_store.append("user", "goal", turn_id="t1")
+        first._event("TurnStarted", "turn", "t1", {"goal": "goal", "plan_mode": "optional"}, turn_id="t1")
+        first.event_store.append("assistant", "already final", turn_id="t1", final=True)
+        first.close()
+        resumed = Agent(str(self.path), workdir=self.directory.name)
+        self.addCleanup(resumed.close)
+        with patch("agent.loop.llm.complete") as complete:
+            self.assertEqual(resumed.resume_active_turn(), "already final")
+        complete.assert_not_called()

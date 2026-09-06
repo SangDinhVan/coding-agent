@@ -1,3 +1,20 @@
+"""Runtime invariant traceability matrix.
+
+1,3,35,37 -> ReducerTests.test_same_event_sequence_builds_equal_runtime_state
+2 -> EventStoreTests/StrictJournalTests sequence and event-ID checks
+4,9,25,26 -> MachineTests plus invalid historical transition tests
+5,24 -> PersistFailureTests.test_persist_failure_before_started_prevents_effect
+6,36,38 -> CompactorTests runtime-projection tests
+7,8,10-13 -> DurableTurnLifecycleTests
+14-16,18 -> PlanLifecycleTests completion and transition tests
+17,19-21 -> PlanGuardEdgeTests, CallerOverrideTests, PlanInvariantReplayTests
+22 -> PlanLifecycleTests.test_evidence_requires_successful_same_session_execution
+23,27,28,34 -> ToolLifecycleTests
+29-32 -> RecoveryTests and ApprovalProgressTests
+33 -> BatchResumeTests.test_resume_drains_pending_batch_before_model_progress
+39 -> Plan/tool guards in PlanLifecycleTests and ToolLifecycleTests
+"""
+
 import copy
 import unittest
 
@@ -99,3 +116,19 @@ class ReducerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class StrictReducerTests(unittest.TestCase):
+    def test_unknown_typed_event_fails_closed(self):
+        with self.assertRaisesRegex(JournalCorruptionError, "unknown event type"):
+            replay([event(1, "InventedEvent", "turn", "t", {}, "t")])
+
+class PlanInvariantReplayTests(unittest.TestCase):
+    def test_two_in_progress_steps_are_rejected_during_replay(self):
+        events = [
+            event(1, "TurnStarted", "turn", "t", {"goal": "g"}, "t"),
+            event(2, "PlanCreated", "plan", "p", {"steps": [{"step_id": "a", "task": "a"}, {"step_id": "b", "task": "b"}]}, "t"),
+            event(3, "PlanStepStarted", "plan", "p", {"step_id": "a"}, "t"),
+            event(4, "PlanStepStarted", "plan", "p", {"step_id": "b"}, "t"),
+        ]
+        with self.assertRaisesRegex(JournalCorruptionError, "one.*in.progress"):
+            replay(events)

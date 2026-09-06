@@ -116,3 +116,33 @@ class ToolLifecycleTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class PersistFailureTests(unittest.TestCase):
+    def test_persist_failure_before_started_prevents_effect(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = EventStore(Path(directory) / "events.jsonl")
+            self.addCleanup(store.close)
+            tool = FakeTool()
+            executor = ToolExecutor(store, get_tool=lambda name: tool)
+            execution_id = executor.request_batch([call()], "t1")[0]
+            original = store.append_event
+            def fail_started(event_type, *args, **kwargs):
+                if event_type == "ToolStarted":
+                    raise OSError("disk full")
+                return original(event_type, *args, **kwargs)
+            with patch.object(store, "append_event", side_effect=fail_started), self.assertRaisesRegex(OSError, "disk full"):
+                executor.execute(execution_id)
+            self.assertEqual(tool.calls, 0)
+
+class SecretArgumentTests(unittest.TestCase):
+    def test_secret_argument_executes_but_is_not_persisted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "events.jsonl"
+            store = EventStore(path)
+            self.addCleanup(store.close)
+            tool = FakeTool()
+            tool.parameters = {"type": "object", "properties": {"token": {"type": "string"}}, "required": ["token"]}
+            executor = ToolExecutor(store, get_tool=lambda name: tool)
+            execution_id = executor.request_batch([call(arguments='{"token":"secret-value"}')], "t1")[0]
+            self.assertTrue(executor.execute(execution_id).success)
+            self.assertNotIn("secret-value", path.read_text(encoding="utf-8"))

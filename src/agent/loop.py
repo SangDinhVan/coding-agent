@@ -194,9 +194,53 @@ class Agent:
     def pending_runtime_actions(self):
         return pending_runtime_actions(self.runtime_state)
 
+    def resolve_approval(self, execution_id: str, approved: bool, note: str) -> None:
+        state = self.runtime_state
+        execution = state.executions.get(execution_id)
+        if execution is None:
+            raise ValueError("unknown execution")
+        result = self.tool_executor.resolve_approval(execution_id, approved, note)
+        self.event_store.append("tool", result.compact, tool_call_id=execution.tool_call_id, turn_id=execution.turn_id)
+        self._refresh()
+
     def resolve_recovery(self, execution_id: str, decision: RecoveryDecision, note: str) -> None:
         self.tool_executor.resolve_recovery(execution_id, decision, note)
         self._refresh()
+
+    def skip_plan_step(self, step_id: str, reason: str, *, actor: str = "caller") -> None:
+        if not reason.strip():
+            raise ValueError("skipping a plan step requires a reason")
+        plan_id = self.runtime_state.active_plan_id
+        if plan_id is None:
+            raise ValueError("no active plan")
+        plan = self.runtime_state.plans[plan_id]
+        step = next((item for item in plan.revisions[-1].steps if item.step_id == step_id), None)
+        if step is None:
+            raise ValueError(f"unknown plan step: {step_id}")
+        self._event(
+            "PlanStepSkipped", "plan", plan_id,
+            {"step_id": step_id, "note": reason, "actor": actor},
+            turn_id=self.runtime_state.active_turn_id,
+        )
+
+    def _drain_pending_executions(self, turn_id: str) -> bool:
+        pending = [
+            execution for execution in self.runtime_state.executions.values()
+            if execution.turn_id == turn_id and execution.status == ToolExecutionStatus.PENDING
+        ]
+        for execution in pending:
+            result = self.tool_executor.execute(execution.execution_id)
+            self._refresh()
+            current = self.runtime_state.executions[execution.execution_id]
+            if current.status == ToolExecutionStatus.WAITING_APPROVAL:
+                return False
+            self.event_store.append(
+                "tool", result.compact,
+                tool_call_id=execution.tool_call_id,
+                turn_id=turn_id,
+            )
+            self._refresh()
+        return True
 
     def resume_active_turn(self, max_iterations: int = 20) -> str:
         turn_id = self.runtime_state.active_turn_id
@@ -204,6 +248,8 @@ class Agent:
             raise RuntimeError("No active turn to resume")
         if self.pending_runtime_actions():
             raise RuntimeError("Resolve pending approval or recovery before resuming")
+        if not self._drain_pending_executions(turn_id):
+            return ""
         final_events = [
             event for event in self.event_store.read_all()
             if event.get("event_type") == "AssistantMessageRecorded"
@@ -279,6 +325,10 @@ class Agent:
                             )
                         self.event_store.append("tool", "Cancelled by user; outcome requires recovery", tool_call_id=tool_call.id, turn_id=turn_id)
                         continue
+                    self._refresh()
+                    execution = self.runtime_state.executions[execution_id]
+                    if execution.status == ToolExecutionStatus.WAITING_APPROVAL:
+                        return ""
                     self.event_store.append("tool", result.compact, tool_call_id=tool_call.id, turn_id=turn_id)
                     self._refresh()
                 if interrupted:
@@ -308,7 +358,8 @@ class Agent:
                 continue
             self.event_store.append("assistant", final_text, turn_id=turn_id, final=True)
             self._event("TurnCompleted", "turn", turn_id, {"final_text": final_text}, turn_id=turn_id)
-            print_text = False
+            if enforced and final_text:
+                print(f"\nassistant> {final_text}", flush=True)
             break
         else:
             self._event(
@@ -386,6 +437,10 @@ class Agent:
                                 raise ValueError(f"invalid evidence execution: {evidence_id}")
                 if status == "failed" and not note:
                     raise ValueError("failed plan step requires a reason")
+                if status == "in_progress":
+                    active = [item.step_id for item in plan.revisions[-1].steps if item.status == PlanStepStatus.IN_PROGRESS and item.step_id != step_id]
+                    if active:
+                        raise ValueError(f"only one plan step can be in_progress; active: {active[0]}")
                 self._event(
                     event_type, "plan", plan.plan_id,
                     {"step_id": step_id, "note": note, "evidence_execution_ids": evidence},
