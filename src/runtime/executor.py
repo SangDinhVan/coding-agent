@@ -113,7 +113,10 @@ class ToolExecutor:
             turn_id=execution.turn_id, correlation_id=execution.turn_id,
         )
         try:
-            result = tool.run(**arguments)
+            if hasattr(tool, "execute_runtime"):
+                result = tool.execute_runtime(execution_id, execution.turn_id, **arguments)
+            else:
+                result = tool.run(**arguments)
         except Exception as error:
             return self._fail(execution, str(error), "exception", type(error).__name__, require_running=True)
         event_type = "ToolCompleted" if result.success else "ToolFailed"

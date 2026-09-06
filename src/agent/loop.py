@@ -15,10 +15,11 @@ from memory.event_store import EventStore
 from memory.manager import MemoryManager
 from model import llm
 from runtime.executor import ToolExecutor
-from runtime.models import PlanMode, PolicyDecision, TurnStatus
+from runtime.models import CompletionPolicy, PlanMode, PlanStepStatus, ToolExecutionStatus, TurnStatus
 from runtime.reducer import completion_blockers, replay, runtime_prompt_projection
 from tools import registry
 from tools.base import ToolResult
+from tools.plan import UpdatePlanTool
 
 
 def encode_image(path: str) -> tuple[str, str]:
@@ -83,9 +84,10 @@ class Agent:
         self.workspace_state = WorkspaceState(cwd=workdir)
         self.runtime_state = replay(self.event_store.read_all())
         self.turn_state = self._latest_turn()
+        self.plan_tool = UpdatePlanTool(self._apply_plan_action)
         self.tool_executor = ToolExecutor(
             self.event_store,
-            get_tool=lambda name: registry.get_tool(name),
+            get_tool=lambda name: self.plan_tool if name == "update_plan" else registry.get_tool(name),
             policy=policy,
             approval_handler=approval_handler,
         )
@@ -200,11 +202,12 @@ class Agent:
             try:
                 response = llm.complete(
                     messages=self._build_context(),
-                    tools=registry.get_schemas(),
+                    tools=registry.get_schemas() + [self.plan_tool.schema()],
                     model=self.model,
                     stream=True,
                 )
-                response_text, tool_calls = self._consume_stream(response)
+                enforced = self.runtime_state.turns[turn_id].plan_mode == PlanMode.REQUIRED or self.runtime_state.turns[turn_id].plan_id is not None
+                response_text, tool_calls = self._consume_stream(response, emit_text=not enforced)
             except KeyboardInterrupt:
                 print("\n[cancelled by user]", flush=True)
                 self._event("TurnInterrupted", "turn", turn_id, {"reason": "user"}, turn_id=turn_id)
@@ -294,6 +297,119 @@ class Agent:
             print("[memory] updating PROJECT.md...", flush=True)
             threading.Thread(target=self._update_memory_bg, args=(recent,), daemon=True).start()
         return final_text
+
+    def _apply_plan_action(self, *, execution_id: str, turn_id: str, action: str, **arguments) -> ToolResult:
+        turn = self.runtime_state.turns[turn_id]
+        plan = self.runtime_state.plans.get(turn.plan_id) if turn.plan_id else None
+        try:
+            if action == "create":
+                if plan is not None:
+                    raise ValueError("an active plan already exists")
+                requested_steps = arguments.get("steps")
+                if not isinstance(requested_steps, list) or not requested_steps:
+                    raise ValueError("create requires at least one plan step")
+                steps = []
+                for index, item in enumerate(requested_steps, 1):
+                    task = str(item.get("task", "")).strip()
+                    if not task:
+                        raise ValueError("each plan step requires a task")
+                    steps.append({
+                        "step_id": f"step_{index}",
+                        "task": task,
+                        "status": "pending",
+                        "required": bool(item.get("required", True)),
+                        "completion_policy": CompletionPolicy(item.get("completion_policy", "self_attested")).value,
+                        "note": None,
+                        "evidence_execution_ids": [],
+                    })
+                plan_id = str(uuid4())
+                self._event(
+                    "PlanCreated", "plan", plan_id,
+                    {"mode": turn.plan_mode.value, "actor": "model", "reason": arguments.get("reason") or "created", "steps": steps},
+                    turn_id=turn_id, causation_id=execution_id,
+                )
+                return ToolResult(f"Created plan {plan_id}", f"Created plan with {len(steps)} step(s)", True)
+
+            if plan is None:
+                raise ValueError("no active plan")
+            if action == "set_step_status":
+                step_id = arguments.get("step_id")
+                status = arguments.get("status")
+                step = next((item for item in plan.revisions[-1].steps if item.step_id == step_id), None)
+                if step is None:
+                    raise ValueError(f"unknown plan step: {step_id}")
+                event_type = {
+                    "in_progress": "PlanStepStarted",
+                    "completed": "PlanStepCompleted",
+                    "failed": "PlanStepFailed",
+                }.get(status)
+                if event_type is None:
+                    raise ValueError("model cannot skip a plan step")
+                note = str(arguments.get("note", "")).strip() or None
+                evidence = list(arguments.get("evidence_execution_ids", []))
+                if status == "completed":
+                    if step.status != PlanStepStatus.IN_PROGRESS:
+                        raise ValueError("invalid plan step transition: completion requires in_progress")
+                    if step.completion_policy == CompletionPolicy.SELF_ATTESTED and not note:
+                        raise ValueError("self-attested completion requires a note")
+                    if step.completion_policy == CompletionPolicy.EVIDENCE_REQUIRED:
+                        if not evidence:
+                            raise ValueError("evidence-required completion needs execution evidence")
+                        for evidence_id in evidence:
+                            found = self.runtime_state.executions.get(evidence_id)
+                            if found is None or found.session_id != self.runtime_state.session_id or found.status != ToolExecutionStatus.COMPLETED:
+                                raise ValueError(f"invalid evidence execution: {evidence_id}")
+                if status == "failed" and not note:
+                    raise ValueError("failed plan step requires a reason")
+                self._event(
+                    event_type, "plan", plan.plan_id,
+                    {"step_id": step_id, "note": note, "evidence_execution_ids": evidence},
+                    turn_id=turn_id, causation_id=execution_id,
+                )
+                return ToolResult(f"Set {step_id} to {status}", f"Plan step {step_id} is now {status}", True)
+
+            if action == "revise":
+                reason = str(arguments.get("reason", "")).strip()
+                requested_steps = arguments.get("steps")
+                if not reason or not isinstance(requested_steps, list) or not requested_steps:
+                    raise ValueError("revise requires reason and steps")
+                current = {step.step_id: step for step in plan.revisions[-1].steps}
+                new_steps = []
+                for index, item in enumerate(requested_steps, 1):
+                    step_id = item.get("step_id") or f"step_{index}"
+                    previous = current.get(step_id)
+                    required = bool(item.get("required", previous.required if previous else True))
+                    if previous and previous.required and not required:
+                        raise ValueError("model cannot downgrade required work")
+                    if previous and previous.status in {PlanStepStatus.COMPLETED, PlanStepStatus.SKIPPED}:
+                        status = previous.status.value
+                        note = previous.note
+                        evidence = previous.evidence_execution_ids
+                    else:
+                        status = "pending"
+                        note = None
+                        evidence = []
+                    new_steps.append({
+                        "step_id": step_id,
+                        "task": str(item.get("task", previous.task if previous else "")).strip(),
+                        "status": status,
+                        "required": required,
+                        "completion_policy": (previous.completion_policy.value if previous else item.get("completion_policy", "self_attested")),
+                        "note": note,
+                        "evidence_execution_ids": list(evidence),
+                    })
+                missing_required = [step.step_id for step in current.values() if step.required and step.step_id not in {item["step_id"] for item in new_steps}]
+                if missing_required:
+                    raise ValueError("model cannot remove required work")
+                self._event(
+                    "PlanRevised", "plan", plan.plan_id,
+                    {"from_revision": plan.active_revision, "to_revision": plan.active_revision + 1, "actor": "model", "reason": reason, "steps": new_steps},
+                    turn_id=turn_id, causation_id=execution_id,
+                )
+                return ToolResult("Plan revised", f"Plan revised to revision {plan.active_revision + 1}", True)
+            raise ValueError(f"unknown plan action: {action}")
+        except (KeyError, TypeError, ValueError) as error:
+            return ToolResult(str(error), f"Error: {error}", False)
 
     def _update_memory_bg(self, recent: str):
         try:
