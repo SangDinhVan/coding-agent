@@ -2,7 +2,7 @@
 agent/loop.py — vòng lặp chính Agent.run_turn(), tích hợp toàn bộ các phần đã build:
 
   tools/    -> registry (list tool, gọi tool.run())
-  memory/   -> EventStore (raw history) + MemoryManager (USER.md/PROJECT.md)
+  memory/   -> EventStore (raw history) + MemoryManager (PROJECT.md)
   context/  -> Compactor (nén messages dài trước khi gửi model)
   model/    -> llm.complete() (gọi litellm)
   agent/    -> TurnState, PlanState, ToolState (state không bị compact)
@@ -78,9 +78,6 @@ SYSTEM_PROMPT_TEMPLATE = """\
 Bạn là 1 coding agent cá nhân, có quyền đọc/ghi/sửa file và chạy lệnh shell \
 thông qua các tool được cung cấp.
 
---- USER.md (preference cá nhân) ---
-{user_md}
-
 --- PROJECT.md (facts về project) ---
 {project_md}
 
@@ -98,9 +95,9 @@ thông qua các tool được cung cấp.
 class Agent:
     def __init__(
         self,
+        events_path: str,
         model: Optional[str] = None,
         workdir: str = ".",
-        events_path: str = "memory/events.jsonl",
     ):
         self.model = model
         self.event_store = EventStore(path=events_path)
@@ -111,10 +108,8 @@ class Agent:
         self.turn_state: Optional[TurnState] = None
 
     def _build_system_message(self) -> dict:
-        user_md, project_md = self.memory_manager.read()
         content = SYSTEM_PROMPT_TEMPLATE.format(
-            user_md=user_md,
-            project_md=project_md,
+            project_md=self.memory_manager.read(),
             turn_state=self.turn_state.render() if self.turn_state else "(no active turn)",
             plan_state=self.plan_state.render(),
             tool_state=self.tool_state.render(),
@@ -344,7 +339,7 @@ class Agent:
         # khoảng chờ im lặng cuối mỗi turn. Turn sau có thể bắt đầu ngay.
         if self.turn_state.status == "done":
             recent = self._render_recent_for_memory()
-            print("[memory] updating USER.md / PROJECT.md...", flush=True)
+            print("[memory] updating PROJECT.md...", flush=True)
             threading.Thread(
                 target=self._update_memory_bg,
                 args=(recent,),
@@ -357,9 +352,8 @@ class Agent:
         """Chạy trong thread nền: gọi LLM sinh diff rồi append vào file memory."""
         try:
             diff = self.memory_manager.update(recent)
-            user_added = diff.get("user_md_append") or ""
             project_added = diff.get("project_md_append") or ""
-            if user_added or project_added:
+            if project_added:
                 print(
                     flush=True,
                 )

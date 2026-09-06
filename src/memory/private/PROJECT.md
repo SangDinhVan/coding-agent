@@ -26,3 +26,8 @@
 - Website bán gà rán (`fried-chicken.html`) dạng single HTML, gồm CSS/JS inline, giỏ hàng, localStorage, responsive.
 
 - Game khủng long runner giống Chrome (`dino-game.html`) dạng single HTML, CSS/JS inline, localStorage lưu kỷ lục, responsive.
+
+Hard constraint cho project hiện tại: các file web/game đơn giản (fried-chicken.html, dino-game.html) cần giữ dạng single-file HTML, CSS/JS inline, dễ copy-paste và publish.
+
+## Project Files
+- `output/hello_world.py`: script Python in Hello, World!; chạy bằng `python3 output/hello_world.py`.

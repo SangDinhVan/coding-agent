@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sang-coding-agent"
+version = "0.1.0"
+description = "Personal AI coding agent CLI"
+requires-python = ">=3.10"
+dependencies = [
+    "litellm",
+    "python-dotenv",
+    "tiktoken",
+]
+
+[project.scripts]
+coding-agent = "main:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+py-modules = ["main"]
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -10,7 +10,7 @@ KEEP_RECENT_MESSAGES = 10
 # của model đang dùng.
 COMPACT_THRESHOLD_RATIO = 0.70
 
-SUMMARY_PROMPT_TEMPLATE = """\
+SUMMARY_PROMPT_TEMPLATE = """\l
 Dưới đây là 1 đoạn hội thoại giữa user và 1 coding agent (bao gồm cả tool \
 call và tool result). Hãy tóm tắt lại NGẮN GỌN nhưng đầy đủ các thông tin \
 quan trọng để agent có thể tiếp tục làm việc mà không mất ngữ cảnh:
