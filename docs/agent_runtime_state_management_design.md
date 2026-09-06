@@ -1,6 +1,6 @@
 # Agent Runtime State Management — Design Specification
 
-> **Trạng thái:** Implemented và verified trên branch `feat/runtime-state-management`  
+> **Trạng thái:** Implemented và verified trên `main`  
 > **Phạm vi:** Đặc tả V1; implementation nằm trong `src/runtime`, runtime harness, tool adapters và CLI.
 >
 > **Làm rõ sau implementation:** secret-like keys được redacted đệ quy trước khi ghi journal; giá trị đã redacted không được tự động replay sau restart. File write/edit dùng SHA-256 để reconcile; arbitrary bash vẫn yêu cầu quyết định thủ công khi outcome không xác định.
