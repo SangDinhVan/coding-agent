@@ -56,8 +56,19 @@ class Compactor:
         if len(non_system) <= KEEP_RECENT_MESSAGES:
             return messages
 
-        to_summarize = non_system[:-KEEP_RECENT_MESSAGES]
-        recent = non_system[-KEEP_RECENT_MESSAGES:]
+        groups = self._interaction_groups(non_system)
+        recent_groups = []
+        recent_count = 0
+        while groups and recent_count < KEEP_RECENT_MESSAGES:
+            group = groups.pop()
+            recent_groups.append(group)
+            recent_count += len(group)
+        recent_groups.reverse()
+        to_summarize = [message for group in groups for message in group]
+        recent = [message for group in recent_groups for message in group]
+
+        if not to_summarize:
+            return messages
 
         conversation_text = self._render_for_summary(to_summarize)
         summary_text = llm.complete_text(
@@ -71,6 +82,32 @@ class Compactor:
         }
 
         return system_messages + [summary_message] + recent
+
+    def _interaction_groups(self, messages: list[dict]) -> list[list[dict]]:
+        """Keep an assistant tool-call and all of its tool results atomic."""
+        groups = []
+        index = 0
+        while index < len(messages):
+            message = messages[index]
+            tool_calls = message.get("tool_calls") or []
+            if message.get("role") != "assistant" or not tool_calls:
+                groups.append([message])
+                index += 1
+                continue
+            expected_ids = {call.get("id") for call in tool_calls}
+            group = [message]
+            index += 1
+            while index < len(messages):
+                candidate = messages[index]
+                if candidate.get("role") != "tool" or candidate.get("tool_call_id") not in expected_ids:
+                    break
+                group.append(candidate)
+                expected_ids.discard(candidate.get("tool_call_id"))
+                index += 1
+                if not expected_ids:
+                    break
+            groups.append(group)
+        return groups
 
     def _render_for_summary(self, messages: list[dict]) -> str:
         """Render messages thành text đơn giản để đưa vào prompt tóm tắt."""
