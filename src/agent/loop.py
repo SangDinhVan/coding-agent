@@ -1,94 +1,69 @@
-"""
-agent/loop.py — vòng lặp chính Agent.run_turn(), tích hợp toàn bộ các phần đã build:
+"""Model-driven agent loop with durable runtime lifecycle boundaries."""
 
-  tools/    -> registry (list tool, gọi tool.run())
-  memory/   -> EventStore (raw history) + MemoryManager (PROJECT.md)
-  context/  -> Compactor (nén messages dài trước khi gửi model)
-  model/    -> llm.complete() (gọi litellm)
-  agent/    -> TurnState, PlanState, ToolState (state không bị compact)
-
-Đây là bản thay thế cho if/elif thủ công xử lý tool_calls trong agent.py cũ.
-"""
+from __future__ import annotations
 
 import base64
-import json
 import mimetypes
 import threading
 from types import SimpleNamespace
 from typing import Optional
+from uuid import uuid4
 
-from agent.state import PlanState, ToolState, TurnState
+from agent.state import WorkspaceState
 from context.compactor import Compactor
 from memory.event_store import EventStore
 from memory.manager import MemoryManager
 from model import llm
+from runtime.executor import ToolExecutor
+from runtime.models import PlanMode, PolicyDecision, TurnStatus
+from runtime.reducer import completion_blockers, replay, runtime_prompt_projection
 from tools import registry
 from tools.base import ToolResult
 
+
 def encode_image(path: str) -> tuple[str, str]:
-    """Đọc ảnh -> (mime_type, base64) để gửi cho model qua content parts."""
     mime_type, _ = mimetypes.guess_type(path)
     if mime_type is None:
         mime_type = "image/png"
-    with open(path, "rb") as f:
-        b64 = base64.b64encode(f.read()).decode("utf-8")
-    return mime_type, b64
+    with open(path, "rb") as file:
+        return mime_type, base64.b64encode(file.read()).decode("utf-8")
 
 
 def build_user_content(text: str, image_paths: list[str] | None = None):
-    """
-    Không có ảnh: giữ nguyên string như cũ (tương thích mọi model).
-    Có ảnh: trả list OpenAI content parts [text, image_url, ...].
-    """
     if not image_paths:
         return text
-
     content = [{"type": "text", "text": text}]
     for path in image_paths:
-        mime_type, b64 = encode_image(path)
-        content.append({
-            "type": "image_url",
-            "image_url": {"url": f"data:{mime_type};base64,{b64}"},
-        })
+        mime_type, encoded = encode_image(path)
+        content.append({"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{encoded}"}})
     return content
 
 
 class StreamedToolCall:
-    """Gom các mảnh của một tool call từ streaming response."""
-
     def __init__(self):
         self.id = ""
         self.type = "function"
-        self.function = SimpleNamespace(
-            name="",
-            arguments="",
-        )
+        self.function = SimpleNamespace(name="", arguments="")
 
     def model_dump(self) -> dict:
         return {
             "id": self.id,
             "type": self.type,
-            "function": {
-                "name": self.function.name,
-                "arguments": self.function.arguments,
-            },
+            "function": {"name": self.function.name, "arguments": self.function.arguments},
         }
 
+
 SYSTEM_PROMPT_TEMPLATE = """\
-Bạn là 1 coding agent cá nhân, có quyền đọc/ghi/sửa file và chạy lệnh shell \
-thông qua các tool được cung cấp.
+Bạn là 1 coding agent cá nhân, có quyền đọc/ghi/sửa file và chạy lệnh shell thông qua các tool được cung cấp.
 
 --- PROJECT.md (facts về project) ---
 {project_md}
 
---- Trạng thái turn hiện tại ---
-{turn_state}
+--- Trạng thái runtime hiện tại ---
+{runtime_state}
 
---- Plan ---
-{plan_state}
-
---- Tool state ---
-{tool_state}
+--- Workspace ---
+{workspace_state}
 """
 
 
@@ -98,169 +73,133 @@ class Agent:
         events_path: str,
         model: Optional[str] = None,
         workdir: str = ".",
+        policy=None,
+        approval_handler=None,
     ):
         self.model = model
         self.event_store = EventStore(path=events_path)
         self.memory_manager = MemoryManager(model=model)
         self.compactor = Compactor(model=model)
-        self.tool_state = ToolState(cwd=workdir)
-        self.plan_state = PlanState()
-        self.turn_state: Optional[TurnState] = None
+        self.workspace_state = WorkspaceState(cwd=workdir)
+        self.runtime_state = replay(self.event_store.read_all())
+        self.turn_state = self._latest_turn()
+        self.tool_executor = ToolExecutor(
+            self.event_store,
+            get_tool=lambda name: registry.get_tool(name),
+            policy=policy,
+            approval_handler=approval_handler,
+        )
+
+    def close(self) -> None:
+        self.event_store.close()
+
+    def _latest_turn(self):
+        if not self.runtime_state.turns:
+            return None
+        return list(self.runtime_state.turns.values())[-1]
+
+    def _refresh(self) -> None:
+        self.runtime_state = replay(self.event_store.read_all())
+        self.turn_state = self._latest_turn()
+
+    def _event(self, event_type, aggregate_type, aggregate_id, payload, *, turn_id=None, causation_id=None):
+        event = self.event_store.append_event(
+            event_type,
+            aggregate_type,
+            aggregate_id,
+            payload,
+            turn_id=turn_id,
+            causation_id=causation_id,
+            correlation_id=turn_id,
+        )
+        self._refresh()
+        return event
 
     def _build_system_message(self) -> dict:
-        content = SYSTEM_PROMPT_TEMPLATE.format(
-            project_md=self.memory_manager.read(),
-            turn_state=self.turn_state.render() if self.turn_state else "(no active turn)",
-            plan_state=self.plan_state.render(),
-            tool_state=self.tool_state.render(),
-        )
-        return {"role": "system", "content": content}
+        return {
+            "role": "system",
+            "content": SYSTEM_PROMPT_TEMPLATE.format(
+                project_md=self.memory_manager.read(),
+                runtime_state=runtime_prompt_projection(self.runtime_state),
+                workspace_state=self.workspace_state.render(),
+            ),
+        }
 
     def _build_context(self) -> list[dict]:
-        """
-        Ráp messages gửi model mỗi vòng lặp:
-          1. system message MỚI mỗi lần gọi (chứa state hiện tại — luôn cập
-             nhật, không nằm trong events.jsonl, không bị Compactor đụng vào)
-          2. history từ EventStore (có thể bị Compactor nén nếu quá dài)
-        """
-        system_message = self._build_system_message()
-        history = [m for m in self.event_store.to_messages() if m["role"] != "system"]
-        messages = [system_message] + history
+        history = [message for message in self.event_store.to_messages() if message["role"] != "system"]
+        messages = [self._build_system_message()] + history
+        return self.compactor.compact(messages) if self.compactor.should_compact(messages) else messages
 
-        if self.compactor.should_compact(messages):
-            messages = self.compactor.compact(messages)
-
-        return messages
-
-    def _consume_stream(self, response):
-        """
-        Đọc streaming response, in text ngay và ghép các mảnh tool call.
-        """
+    def _consume_stream(self, response, *, emit_text: bool = True):
         full_text = ""
-        tool_calls_by_index = {}
+        calls = {}
         started_printing = False
-        try:
-            for chunk in response:
-                if not chunk.choices:
-                    continue
-
-                delta = chunk.choices[0].delta
-
-                # Nếu chunk chứa text, in ngay ra terminal.
-                content = getattr(delta, "content", None)
-
-                if content:
-                    if not started_printing:
-                        print(
-                            "\nassistant> ",
-                            end="",
-                            flush=True,
-                        )
-                        started_printing = True
-
+        for chunk in response:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            content = getattr(delta, "content", None)
+            if content:
+                if emit_text and not started_printing:
+                    print("\nassistant> ", end="", flush=True)
+                    started_printing = True
+                if emit_text:
                     print(content, end="", flush=True)
-                    full_text += content
-
-                # Nếu chunk chứa một phần tool call, ghép nó lại.
-                delta_tool_calls = (
-                    getattr(delta, "tool_calls", None) or []
-                )
-
-                for tool_call_delta in delta_tool_calls:
-                    index = getattr(
-                        tool_call_delta,
-                        "index",
-                        None,
-                    )
-
-                    if index is None:
-                        index = 0
-
-                    if index not in tool_calls_by_index:
-                        tool_calls_by_index[index] = (
-                            StreamedToolCall()
-                        )
-
-                    accumulated = tool_calls_by_index[index]
-
-                    tool_call_id = getattr(
-                        tool_call_delta,
-                        "id",
-                        None,
-                    )
-                    if tool_call_id:
-                        accumulated.id = tool_call_id
-
-                    tool_call_type = getattr(
-                        tool_call_delta,
-                        "type",
-                        None,
-                    )
-                    if tool_call_type:
-                        accumulated.type = tool_call_type
-
-                    function_delta = getattr(
-                        tool_call_delta,
-                        "function",
-                        None,
-                    )
-
-                    if function_delta is not None:
-                        function_name = getattr(
-                            function_delta,
-                            "name",
-                            None,
-                        )
-                        if function_name:
-                            accumulated.function.name += (
-                                function_name
-                            )
-
-                        arguments = getattr(
-                            function_delta,
-                            "arguments",
-                            None,
-                        )
-                        if arguments:
-                            accumulated.function.arguments += (
-                                arguments
-                            )
-        except KeyboardInterrupt:
-            raise
-        
+                full_text += content
+            for part in getattr(delta, "tool_calls", None) or []:
+                index = getattr(part, "index", None)
+                index = 0 if index is None else index
+                accumulated = calls.setdefault(index, StreamedToolCall())
+                if getattr(part, "id", None):
+                    accumulated.id = part.id
+                if getattr(part, "type", None):
+                    accumulated.type = part.type
+                function = getattr(part, "function", None)
+                if function is not None:
+                    accumulated.function.name += getattr(function, "name", None) or ""
+                    accumulated.function.arguments += getattr(function, "arguments", None) or ""
         if started_printing:
             print()
-
-        tool_calls = [
-            tool_calls_by_index[index]
-            for index in sorted(tool_calls_by_index)
-        ]
-
-        return full_text, tool_calls
+        return full_text, [calls[index] for index in sorted(calls)]
 
     def run_turn(
         self,
         user_input: str,
         image_paths: list[str] | None = None,
         max_iterations: int = 20,
+        plan_mode: PlanMode = PlanMode.OPTIONAL,
+        resumes_turn_id: str | None = None,
     ) -> str:
-        """
-        Chạy 1 turn: nhận user_input (+ ảnh nếu có), lặp tool-call cho tới khi
-        model trả lời text thuần (không còn tool_call) hoặc chạm max_iterations.
-        """
-        self.turn_state = TurnState(goal=user_input)
+        if self.runtime_state.active_turn_id is not None:
+            raise RuntimeError("An active turn must be resumed or recovered before starting another turn.")
+        turn_id = str(uuid4())
         self.event_store.append(
-            role="user",
-            content=build_user_content(user_input, image_paths),
+            "user", build_user_content(user_input, image_paths), turn_id=turn_id
         )
+        self._event(
+            "TurnStarted",
+            "turn",
+            turn_id,
+            {
+                "goal": user_input,
+                "plan_mode": PlanMode(plan_mode).value,
+                "resumes_turn_id": resumes_turn_id,
+            },
+            turn_id=turn_id,
+        )
+        return self._drive_turn(turn_id, max_iterations)
 
+    def _drive_turn(self, turn_id: str, max_iterations: int) -> str:
         final_text = ""
-
         for _ in range(max_iterations):
+            turn = self.runtime_state.turns[turn_id]
+            self._event(
+                "TurnIterationAdvanced", "turn", turn_id,
+                {"iteration": turn.iteration + 1}, turn_id=turn_id,
+            )
             try:
-                messages = self._build_context()
                 response = llm.complete(
-                    messages=messages,
+                    messages=self._build_context(),
                     tools=registry.get_schemas(),
                     model=self.model,
                     stream=True,
@@ -268,134 +207,115 @@ class Agent:
                 response_text, tool_calls = self._consume_stream(response)
             except KeyboardInterrupt:
                 print("\n[cancelled by user]", flush=True)
-                self.turn_state.status = "failed"
-                self.turn_state.current_problem = "Turn cancelled by user"
+                self._event("TurnInterrupted", "turn", turn_id, {"reason": "user"}, turn_id=turn_id)
                 return final_text
+            except Exception as error:
+                self._event(
+                    "TurnFailed", "turn", turn_id,
+                    {"error": {"category": "model", "message": str(error), "exception_type": type(error).__name__}},
+                    turn_id=turn_id,
+                )
+                raise
 
             if tool_calls:
                 self.event_store.append(
-                    role="assistant",
-                    content=response_text or None,
-                    tool_calls=[
-                        tool_call.model_dump()
-                        for tool_call in tool_calls
-                    ],
+                    "assistant",
+                    response_text or None,
+                    tool_calls=[call.model_dump() for call in tool_calls],
+                    turn_id=turn_id,
                 )
+                execution_ids = self.tool_executor.request_batch(tool_calls, turn_id)
+                self._refresh()
                 interrupted = False
-                for tool_call in tool_calls:
+                for tool_call, execution_id in zip(tool_calls, execution_ids):
                     if interrupted:
-                        # các tool_call phía sau chưa kịp chạy -> vẫn phải đóng lại
-                        self.event_store.append(
-                            role="tool",
-                            tool_call_id=tool_call.id,
-                            content="Cancelled by user (not executed)",
+                        self._event(
+                            "ToolCancelled", "tool_execution", execution_id,
+                            {"reason": "turn interrupted before execution"}, turn_id=turn_id,
                         )
+                        self.event_store.append("tool", "Cancelled by user (not executed)", tool_call_id=tool_call.id, turn_id=turn_id)
                         continue
-                    try: 
-                        print(
-                            f"\ntool> {tool_call.function.name}",
-                            flush=True,
-                        )
-                        result = self._execute_tool_call(tool_call)
-
+                    print(f"\ntool> {tool_call.function.name}", flush=True)
+                    try:
+                        result = self.tool_executor.execute(execution_id)
                     except KeyboardInterrupt:
                         interrupted = True
-                        self.event_store.append(
-                            role="tool",
-                            tool_call_id=tool_call.id,
-                            content="Cancelled by user",
-                        )
+                        self._refresh()
+                        execution = self.runtime_state.executions[execution_id]
+                        if execution.status.value == "recovery_required":
+                            pass
+                        elif execution.status.value == "running":
+                            self._event(
+                                "ToolRecoveryRequired", "tool_execution", execution_id,
+                                {"reason": "interrupted with unknown outcome"}, turn_id=turn_id,
+                            )
+                        self.event_store.append("tool", "Cancelled by user; outcome requires recovery", tool_call_id=tool_call.id, turn_id=turn_id)
                         continue
-                    self.event_store.append(
-                        role="tool",
-                        tool_call_id=tool_call.id,
-                        content=result.compact,
-                    )
-
-                    if not result.success:
-                        self.turn_state.current_problem = result.compact
+                    self.event_store.append("tool", result.compact, tool_call_id=tool_call.id, turn_id=turn_id)
+                    self._refresh()
                 if interrupted:
-                    self.turn_state.status = "failed"
-                    self.turn_state.current_problem = "Turn cancelled by user"
+                    self._event("TurnInterrupted", "turn", turn_id, {"reason": "user"}, turn_id=turn_id)
                     return final_text
-                
-                continue  # loop lại để model đọc kết quả tool và quyết định bước tiếp
+                continue
 
-            # Không còn tool_call -> model trả lời text cuối cùng cho turn này
             final_text = response_text
-            self.event_store.append(
-                role="assistant", 
-                content=final_text
+            self._event(
+                "CompletionRequested", "turn", turn_id,
+                {"candidate_text": final_text}, turn_id=turn_id,
             )
-            self.turn_state.status = "done"
+            blockers = completion_blockers(self.runtime_state, turn_id)
+            if blockers:
+                self._event(
+                    "CompletionBlocked", "turn", turn_id,
+                    {"blockers": [{"code": item.code, "ids": list(item.ids)} for item in blockers]},
+                    turn_id=turn_id,
+                )
+                if self.turn_state.completion_block_count >= 3:
+                    self._event(
+                        "TurnFailed", "turn", turn_id,
+                        {"error": {"category": "repeated_incomplete_plan", "message": "Completion blocked three consecutive times"}},
+                        turn_id=turn_id,
+                    )
+                    return ""
+                continue
+            self.event_store.append("assistant", final_text, turn_id=turn_id, final=True)
+            self._event("TurnCompleted", "turn", turn_id, {"final_text": final_text}, turn_id=turn_id)
+            print_text = False
             break
         else:
-            self.turn_state.status = "failed"
-            self.turn_state.current_problem = f"Reached max_iterations ({max_iterations})"
+            self._event(
+                "TurnFailed", "turn", turn_id,
+                {"error": {"category": "max_iterations", "message": f"Reached max_iterations ({max_iterations})"}},
+                turn_id=turn_id,
+            )
 
-        # Cập nhật memory bền vững khi turn hoàn thành — chạy trong background
-        # thread (daemon) để KHÔNG block vòng lặp chính: update() gọi thêm 1
-        # LLM call nữa (stream=False, vài giây), nếu chạy đồng bộ sẽ tạo
-        # khoảng chờ im lặng cuối mỗi turn. Turn sau có thể bắt đầu ngay.
-        if self.turn_state.status == "done":
+        if self.turn_state.status == TurnStatus.COMPLETED:
             recent = self._render_recent_for_memory()
             print("[memory] updating PROJECT.md...", flush=True)
-            threading.Thread(
-                target=self._update_memory_bg,
-                args=(recent,),
-                daemon=True,
-            ).start()
-
+            threading.Thread(target=self._update_memory_bg, args=(recent,), daemon=True).start()
         return final_text
 
     def _update_memory_bg(self, recent: str):
-        """Chạy trong thread nền: gọi LLM sinh diff rồi append vào file memory."""
         try:
-            diff = self.memory_manager.update(recent)
-            project_added = diff.get("project_md_append") or ""
-            if project_added:
-                print(
-                    flush=True,
-                )
-            else:
-                print(flush=True)
-        except Exception as e:
-            print(f"[memory] update failed: {e}", flush=True)
+            self.memory_manager.update(recent)
+            print(flush=True)
+        except Exception as error:
+            print(f"[memory] update failed: {error}", flush=True)
 
     def _execute_tool_call(self, tool_call) -> ToolResult:
-        tool = registry.get_tool(tool_call.function.name)
-
-        if tool is None:
-            return ToolResult(
-                raw=f"Unknown tool: {tool_call.function.name}",
-                compact=f"Error: tool '{tool_call.function.name}' does not exist.",
-                success=False,
-            )
-
-        try:
-            args = json.loads(tool_call.function.arguments)
-        except json.JSONDecodeError:
-            return ToolResult(
-                raw=f"Invalid JSON arguments: {tool_call.function.arguments}",
-                compact="Error: tool call arguments are not valid JSON.",
-                success=False,
-            )
-
-        result = tool.run(**args)
-
-        # Track file đã sửa trong turn -> nuôi TurnState.files_touched,
-        # cũng là input hữu ích cho MemoryManager khi update PROJECT.md.
-        if tool.name in ("write", "edit") and "path" in args:
-            self.turn_state.mark_file_touched(args["path"])
-
+        turn_id = self.runtime_state.active_turn_id
+        if turn_id is None:
+            raise RuntimeError("No active turn")
+        execution_id = self.tool_executor.request_batch([tool_call], turn_id)[0]
+        result = self.tool_executor.execute(execution_id)
+        self._refresh()
         return result
 
     def _render_recent_for_memory(self, last_n: int = 20) -> str:
-        messages = self.event_store.to_messages()[-last_n:]
         lines = []
-        for m in messages:
-            content = m.get("content", "")
+        for message in self.event_store.to_messages()[-last_n:]:
+            content = message.get("content", "")
             if isinstance(content, list):
                 content = llm.content_to_text(content)
-            lines.append(f"{m['role']}: {content}")
+            lines.append(f"{message['role']}: {content}")
         return "\n".join(lines)

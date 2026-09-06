@@ -170,7 +170,12 @@ def reduce_event(state: RuntimeState, event: dict) -> RuntimeState:
             attempt=int(payload.get("attempt", 0)),
             recovery_metadata=dict(payload.get("recovery_metadata", {})),
         )
-    elif kind.startswith("Tool"):
+    elif kind in {
+        "ToolValidated", "ToolApprovalRequested", "ToolApproved", "ToolRejected",
+        "ToolStarted", "ToolCompleted", "ToolFailed", "ToolCancelled",
+        "ToolRecoveryRequired", "ToolRecoveredAsCompleted", "ToolRecoveredAsFailed",
+        "ToolRetryScheduled",
+    }:
         execution = state.executions.get(aggregate_id)
         if execution is None:
             raise ValueError("tool event references missing execution")
