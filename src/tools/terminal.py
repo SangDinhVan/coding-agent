@@ -1,99 +1,32 @@
-"""
-terminal.py — 1 tool duy nhất: bash, chạy shell command và trả stdout/stderr/exit code.
-
-Lưu ý quan trọng (ghi rõ để nhớ khi làm phần permission/sandbox sau này —
-phần này CHƯA làm, tool hiện tại chạy trực tiếp trên máy host, không sandbox):
-- timeout mặc định để tránh 1 lệnh treo làm agent loop kẹt vĩnh viễn
-- output terminal thường rất dài (build log, test log...) -> compact phải
-  cắt mạnh, đúng nguyên tắc "Tool output phải nén mạnh" trong plan
-"""
-
-import subprocess
+"""Sandbox-only shell tool. Host shell execution is intentionally forbidden."""
+from sandbox.models import ExecRequest, SandboxPath
 from tools.base import BaseTool, ToolResult
 from runtime.models import ReplayPolicy
 
 DEFAULT_TIMEOUT_SECONDS = 60
-
-# Compact chỉ giữ lại N ký tự cuối cùng của output — thường lỗi/kết quả
-# quan trọng nhất nằm ở cuối log (ví dụ traceback, test summary).
 COMPACT_MAX_CHARS = 2000
 
 
 class BashTool(BaseTool):
     replay_policy = ReplayPolicy.MANUAL
-    def __init__(self):
-        self.name = "bash"
-        self.description = (
-            "Chạy 1 shell command và trả về stdout, stderr, exit code. "
-            f"Command sẽ bị kill nếu chạy quá {DEFAULT_TIMEOUT_SECONDS} giây."
-        )
-        self.parameters = {
-            "type": "object",
-            "properties": {
-                "command": {
-                    "type": "string",
-                    "description": "Shell command cần chạy.",
-                },
-                "cwd": {
-                    "type": "string",
-                    "description": "Thư mục làm việc để chạy command (mặc định: thư mục hiện tại của process).",
-                },
-            },
-            "required": ["command"],
-        }
+    name = "bash"
 
-    def execute(self, command: str, cwd: str = None, **kwargs) -> ToolResult:
+    def __init__(self, sandbox=None):
+        self.sandbox = sandbox
+        self.description = f"Chạy shell trong isolated offline sandbox; timeout mặc định {DEFAULT_TIMEOUT_SECONDS}s."
+        self.parameters = {"type": "object", "properties": {"command": {"type": "string"}, "cwd": {"type": "string", "description": "Workspace-relative directory."}}, "required": ["command"]}
+
+    def execute(self, command: str, cwd: str = ".", **kwargs):
+        if self.sandbox is None:
+            return ToolResult("SandboxUnavailable", "Sandbox is unavailable; host shell execution is forbidden", False)
+        relative_cwd = "." if cwd in (None, "", ".") else cwd
         try:
-            result = subprocess.run(
-                command,
-                shell=True,
-                cwd=cwd,
-                capture_output=True,
-                text=True,
-                timeout=DEFAULT_TIMEOUT_SECONDS,
-                errors="replace"
-
-            )
-        except subprocess.TimeoutExpired:
-            return ToolResult(
-                raw=f"Command timed out after {DEFAULT_TIMEOUT_SECONDS}s: {command}",
-                compact=(
-                    f"Command timed out after {DEFAULT_TIMEOUT_SECONDS}s. "
-                    f"It may still be running in the background — consider a "
-                    f"shorter-running command or check process state."
-                ),
-                success=False,
-            )
-        except OSError as e:
-            return ToolResult(
-                raw=f"OSError running command: {command}\n{e}",
-                compact=f"Failed to run command: {e}",
-                success=False,
-            )
-
-        stdout = result.stdout or ""
-        stderr = result.stderr or ""
-        exit_code = result.returncode
-        success = exit_code == 0
-
-        raw = (
-            f"$ {command}\n"
-            f"exit code: {exit_code}\n"
-            f"--- stdout ---\n{stdout}\n"
-            f"--- stderr ---\n{stderr}"
-        )
-
-        combined = (stdout + stderr).strip()
-        if len(combined) <= COMPACT_MAX_CHARS:
-            output_preview = combined if combined else "(no output)"
-        else:
-            # Giữ lại phần CUỐI vì lỗi/kết quả quan trọng nhất thường ở cuối log.
-            truncated_chars = len(combined) - COMPACT_MAX_CHARS
-            output_preview = (
-                f"...({truncated_chars} chars truncated)...\n"
-                f"{combined[-COMPACT_MAX_CHARS:]}"
-            )
-
-        compact = f"$ {command}\nexit code: {exit_code}\n{output_preview}"
-
-        return ToolResult(raw=raw, compact=compact, success=success)   
+            request = ExecRequest("tool", command, SandboxPath(relative_cwd), DEFAULT_TIMEOUT_SECONDS)
+        except ValueError as error:
+            return ToolResult(str(error), f"Invalid sandbox command: {error}", False)
+        result = self.sandbox.exec(request)
+        combined = (result.stdout + result.stderr).strip()
+        preview = combined if len(combined) <= COMPACT_MAX_CHARS else f"...({len(combined)-COMPACT_MAX_CHARS} chars truncated)...\n{combined[-COMPACT_MAX_CHARS:]}"
+        metadata = {"sandbox_session_id": result.sandbox_session_id, "container_id": result.container_id, "image_digest": result.image_digest, "violation_status": result.violation_status.value, "truncated": result.truncated}
+        raw = f"$ {command}\nexit code: {result.exit_code}\n--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}"
+        return ToolResult(raw, f"$ {command}\nexit code: {result.exit_code}\n{preview or '(no output)'}", result.success, result.exit_code, metadata)

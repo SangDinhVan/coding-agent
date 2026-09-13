@@ -204,6 +204,7 @@ class ToolResultData:
     compact: str
     success: bool
     exit_code: int | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

@@ -4,9 +4,10 @@ import json
 from pathlib import Path
 from typing import Optional
 
+from core.paths import ControlPaths
 from model import llm
 
-DEFAULT_PROJECT_MD_PATH = "src/memory/private/PROJECT.md"
+DEFAULT_PROJECT_MD_PATH = ControlPaths.default_root() / "projects" / "default" / "PROJECT.md"
 
 PROJECT_MD_TEMPLATE = """# PROJECT.md
 

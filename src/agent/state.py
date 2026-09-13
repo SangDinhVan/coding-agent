@@ -1,56 +1,41 @@
-"""Live workspace projection; durable runtime state lives in runtime models."""
+"""Read-only sandbox projection for the model prompt."""
+from __future__ import annotations
 
-import subprocess
+import json
 from dataclasses import dataclass
 
 
 @dataclass
 class WorkspaceState:
-    """Read-only environment snapshot rebuilt from the actual workspace."""
-
-    cwd: str = "."
+    sandbox: object | None = None
 
     def snapshot(self) -> dict:
+        if self.sandbox is None:
+            return {"cwd": "/workspace", "sandbox_status": "unavailable", "image": "unknown", "network": "none", "included": 0, "excluded": 0}
+        try:
+            manifest = json.loads(self.sandbox.paths.baseline_manifest.read_text(encoding="utf-8"))
+        except (OSError, TypeError, ValueError):
+            manifest = {"included": [], "excluded": []}
+        status = getattr(getattr(self.sandbox, "status", None), "value", "unavailable")
+        image = getattr(getattr(self.sandbox, "backend", None), "image", "unknown")
         return {
-            "cwd": self.cwd,
-            "git_head": self._get_git_head(),
-            "modified_files": self._get_git_modified_files(),
+            "cwd": "/workspace",
+            "sandbox_status": status,
+            "image": image.rsplit("sha256:", 1)[-1][:12] if "sha256:" in image else image,
+            "network": "none",
+            "included": len(manifest.get("included", [])),
+            "excluded": len(manifest.get("excluded", [])),
         }
-
-    def _get_git_head(self) -> str:
-        try:
-            result = subprocess.run(
-                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                cwd=self.cwd,
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            return result.stdout.strip() if result.returncode == 0 else "(not a git repo)"
-        except Exception:
-            return "(git unavailable)"
-
-    def _get_git_modified_files(self) -> list[str]:
-        try:
-            result = subprocess.run(
-                ["git", "status", "--porcelain"],
-                cwd=self.cwd,
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            if result.returncode != 0:
-                return []
-            return [line[3:] for line in result.stdout.splitlines() if line.strip()]
-        except Exception:
-            return []
 
     def render(self) -> str:
         snap = self.snapshot()
         return (
             f"cwd: {snap['cwd']}\n"
-            f"git branch: {snap['git_head']}\n"
-            f"modified files: {', '.join(snap['modified_files']) or '(none)'}"
+            f"sandbox: {snap['sandbox_status']}\n"
+            f"image: {snap['image']}\n"
+            f"network: {snap['network']}\n"
+            f"included files: {snap['included']}\n"
+            f"excluded entries: {snap['excluded']}"
         )
 
 

@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
-from pathlib import Path
 from typing import Callable
 from uuid import uuid4
 
@@ -145,7 +143,13 @@ class ToolExecutor:
         except Exception as error:
             return self._fail(execution, str(error), "exception", type(error).__name__, require_running=True)
         event_type = "ToolCompleted" if result.success else "ToolFailed"
-        payload = {"result": {"raw": result.raw, "compact": result.compact, "success": result.success, "exit_code": None}}
+        payload = {"result": {
+            "raw": result.raw,
+            "compact": result.compact,
+            "success": result.success,
+            "exit_code": result.exit_code,
+            "metadata": result.metadata,
+        }}
         if not result.success:
             payload["error"] = {"category": "tool_result", "message": result.compact}
         self.store.append_event(
@@ -190,11 +194,16 @@ class ToolExecutor:
         if execution is None or execution.status != ToolExecutionStatus.RECOVERY_REQUIRED:
             raise ValueError("execution does not require recovery")
         decision = RecoveryDecision(decision)
+        tool = self.get_tool(execution.tool_name)
+        if tool is None:
+            raise ValueError("recovery requires the original bound tool")
         if decision == RecoveryDecision.RETRY:
             if execution.replay_policy == ReplayPolicy.MANUAL:
                 raise ValueError("manual recovery policy forbids retry")
             if execution.replay_policy == ReplayPolicy.RECONCILABLE:
-                current_hash = self._current_hash(execution.recovery_metadata)
+                current_hash = tool.recovery_fingerprint(execution.recovery_metadata)
+                if current_hash is None:
+                    raise ValueError("sandbox recovery evidence is unavailable")
                 if current_hash != execution.recovery_metadata.get("before_hash"):
                     raise ValueError("file state does not match the pre-effect hash")
             self.store.append_event(
@@ -204,7 +213,9 @@ class ToolExecutor:
             return self.execute(execution_id)
         if decision == RecoveryDecision.COMPLETED:
             if execution.replay_policy == ReplayPolicy.RECONCILABLE:
-                current_hash = self._current_hash(execution.recovery_metadata)
+                current_hash = tool.recovery_fingerprint(execution.recovery_metadata)
+                if current_hash is None:
+                    raise ValueError("sandbox recovery evidence is unavailable")
                 if current_hash != execution.recovery_metadata.get("expected_after_hash"):
                     raise ValueError("file state does not match the expected result hash")
             result = ToolResult(
@@ -225,13 +236,6 @@ class ToolExecutor:
             turn_id=execution.turn_id, correlation_id=execution.turn_id,
         )
         return result
-
-    @staticmethod
-    def _current_hash(metadata: dict) -> str:
-        path = Path(metadata.get("path", ""))
-        if not path.exists():
-            return "__missing__"
-        return hashlib.sha256(path.read_bytes()).hexdigest()
 
     def _fail(
         self,

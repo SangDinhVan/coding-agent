@@ -794,3 +794,65 @@ Topics to investigate separately later:
 ---
 
 Vậy là đã khép trọn vòng: **Action Normalizer → Hard Policy → SLM → Human → Capability Grant → Checkpoint → Sandbox → Execution → Audit/Recovery → Tool Result → Main LLM.** Mỗi mũi tên trong diagram gốc giờ đã có input/output schema tương ứng.
+---
+
+## 8. Implementation Status — Sandbox V1 (2026-09-12)
+
+The implemented V1 scope is the **OS Sandbox / Physical Enforcer**, not the
+complete target pipeline described above. New sessions use live workspace mode;
+metadata created before this migration remains legacy shadow mode.
+
+### Enforced now
+
+- All model-controlled shell and filesystem tools are bound to one rootless
+  Docker session and fail closed when no running session exists.
+- The container uses an immutable image, `network=none`, a read-only root
+  filesystem, all capabilities dropped, no-new-privileges, cgroups v2
+  CPU/memory/PID limits, bounded `/tmp`, and one exact writable workspace bind.
+- New live sessions mount the host repository RW, so successful tool effects are
+  visible immediately. The child runs as `0:0` only inside the rootless user
+  namespace, mapping to the invoking unprivileged host user. Legacy shadow
+  sessions retain image user `65532:65532`.
+- Existing `.git`, `.env*`, credential, Git-ignored, cache, and paths selected
+  by `.agentignore` are replaced inside live children by protected empty
+  read-only masks. Host home, Docker socket, inherited host secrets, and paths
+  outside the selected workspace are not mounted.
+- Runtime inspect/probe and resume reconciliation verify the exact mode, bind
+  source, mask source/destination/read-only state, user, image, labels,
+  privileges, network, rootfs, and resource limits. Mismatch fails closed.
+- Session stop, crash, `/discard`, or TTL cleanup never deletes or claims to
+  restore live repository changes. Review and undo use Git or the IDE.
+- Legacy metadata without `workspace_mode` is treated as shadow and is never
+  auto-migrated. Its independent snapshot, shadow Git baseline, deterministic
+  exact-hash whole-set approval, conflict checks, durable apply journal, rollback,
+  and `/discard` behavior remain available.
+- A host heartbeat/disk watchdog and exact-label TTL cleanup support lifecycle
+  safety for both modes.
+
+### Meaning of target fields in V1
+
+- `granted_scope.fs_read` and `granted_scope.fs_write` are policy/audit intent;
+  kernel enforcement is workspace-wide except for the live paths masked at
+  session creation.
+- Live mode deliberately has no final whole-set approval gate or automatic file
+  rollback. Successful tool mutations are already in the repository.
+- Mask discovery protects denylisted/ignored entries that exist when the session
+  starts; it cannot pre-mount every future filename that arbitrary shell may
+  create later.
+- `sandbox_violation` is represented as `detected | not_detected | unknown`.
+  Descriptor helpers can prove certain traversal violations, while arbitrary
+  shell execution often yields only an observation rather than syscall intent.
+- Per-action checkpoints remain future work. The legacy shadow baseline remains
+  the checkpoint only for older shadow sessions.
+- Network grants accept only denied/empty scope in V1. There is no egress proxy
+  or package-install exception.
+
+### Deferred target layers
+
+Safety V2 covers deterministic action normalization, hard policy, and scoped
+capability calculation. Safety V3 covers the SLM reviewer, persistent human
+approval scopes, injection screening, controlled egress, stronger runtime
+profiles, content-based secret detection, and richer live rollback/checkpoints.
+
+Operational commands, exact image digests, verification commands, recovery, and
+limitations are documented in `sandbox_v1_operations.md`.

@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from runtime.models import ReplayPolicy
@@ -20,6 +20,8 @@ class ToolResult:
     raw: str
     compact: str
     success: bool
+    exit_code: int | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class BaseTool(ABC):
@@ -54,6 +56,10 @@ class BaseTool(ABC):
     def recovery_metadata(self, **kwargs: Any) -> dict[str, Any]:
         """Return facts persisted before a side effect; empty for non-reconcilable tools."""
         return {}
+
+    def recovery_fingerprint(self, metadata: dict[str, Any]) -> str | None:
+        """Probe current effect state through the tool's execution boundary."""
+        return None
 
     def run(self, **kwargs: Any) -> ToolResult:
         """

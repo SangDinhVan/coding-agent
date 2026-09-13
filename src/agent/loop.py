@@ -17,9 +17,11 @@ from model import llm
 from runtime.executor import ToolExecutor
 from runtime.models import CompletionPolicy, PlanMode, PlanStepStatus, RecoveryDecision, ToolExecutionStatus, TurnStatus
 from runtime.reducer import completion_blockers, pending_runtime_actions, replay, runtime_prompt_projection
-from tools import registry
+from sandbox.changes import apply_changeset, load_changeset
+from sandbox.models import SandboxStatus, WorkspaceMode
 from tools.base import ToolResult
 from tools.plan import UpdatePlanTool
+from tools.registry import ToolRegistry
 
 
 def encode_image(path: str) -> tuple[str, str]:
@@ -76,24 +78,71 @@ class Agent:
         workdir: str = ".",
         policy=None,
         approval_handler=None,
+        sandbox=None,
+        tool_registry=None,
     ):
         self.model = model
         self.event_store = EventStore(path=events_path)
         self.memory_manager = MemoryManager(model=model)
         self.compactor = Compactor(model=model)
-        self.workspace_state = WorkspaceState(cwd=workdir)
+        self.sandbox = sandbox
+        self.tool_registry = tool_registry or ToolRegistry(sandbox)
+        self.workspace_state = WorkspaceState(sandbox=sandbox)
+        self.workspace_mode = getattr(sandbox, "mode", WorkspaceMode.SHADOW)
+        self.last_changes = (
+            load_changeset(sandbox.paths)
+            if sandbox is not None
+            and self.workspace_mode == WorkspaceMode.SHADOW
+            and sandbox.status == SandboxStatus.SEALED
+            else None
+        )
         self.runtime_state = replay(self.event_store.read_all(), current_runtime_instance_id=self.event_store.runtime_instance_id)
         self.turn_state = self._latest_turn()
         self.plan_tool = UpdatePlanTool(self._apply_plan_action)
         self.tool_executor = ToolExecutor(
             self.event_store,
-            get_tool=lambda name: self.plan_tool if name == "update_plan" else registry.get_tool(name),
+            get_tool=lambda name: self.plan_tool if name == "update_plan" else self.tool_registry.get(name),
             policy=policy,
             approval_handler=approval_handler,
         )
 
     def close(self) -> None:
-        self.event_store.close()
+        try:
+            if self.sandbox is not None:
+                status = getattr(getattr(self.sandbox, "status", None), "value", None)
+                if status in {"running", "created", "error"}:
+                    self.sandbox.stop("agent_close")
+        finally:
+            self.event_store.close()
+
+    def prepare_changes(self):
+        if self.sandbox is None:
+            raise RuntimeError("sandbox is unavailable")
+        if self.workspace_mode == WorkspaceMode.LIVE:
+            raise RuntimeError("live workspace changes are already applied")
+        self.last_changes = self.sandbox.prepare_changes()
+        return self.last_changes
+
+    def apply_changes(self, approved_hash: str, note: str):
+        if self.workspace_mode == WorkspaceMode.LIVE:
+            raise RuntimeError("live workspace changes are already applied")
+        if self.sandbox is None or self.last_changes is None:
+            raise RuntimeError("run /changes before /apply")
+        result = apply_changeset(
+            self.sandbox.paths,
+            self.sandbox.source_workspace,
+            self.last_changes,
+            approved_hash,
+            note,
+        )
+        self.sandbox.destroy("applied")
+        return result
+
+    def discard(self) -> None:
+        if self.sandbox is None:
+            raise RuntimeError("sandbox is unavailable")
+        reason = "close_live" if self.workspace_mode == WorkspaceMode.LIVE else "discard"
+        self.sandbox.destroy(reason)
 
     def _latest_turn(self):
         if not self.runtime_state.turns:
@@ -273,7 +322,7 @@ class Agent:
             try:
                 response = llm.complete(
                     messages=self._build_context(),
-                    tools=registry.get_schemas() + [self.plan_tool.schema()],
+                    tools=self.tool_registry.schemas() + [self.plan_tool.schema()],
                     model=self.model,
                     stream=True,
                 )

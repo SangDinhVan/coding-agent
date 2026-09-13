@@ -37,7 +37,8 @@ class ToolLifecycleTests(unittest.TestCase):
         return [e["event_type"] for e in self.store.read_all()]
 
     def test_success_emits_requested_validated_started_completed(self):
-        executor = self.executor()
+        tool = FakeTool(ToolResult("raw-ok", "compact-ok", True, 7, {"container_id": "cid"}))
+        executor = self.executor(tool)
         execution_id = executor.request_batch([call()], "t1")[0]
         result = executor.execute(execution_id)
         self.assertTrue(result.success)
@@ -46,6 +47,8 @@ class ToolLifecycleTests(unittest.TestCase):
         self.assertEqual(execution.status, ToolExecutionStatus.COMPLETED)
         self.assertEqual(execution.result.raw, "raw-ok")
         self.assertEqual(execution.result.compact, "compact-ok")
+        self.assertEqual(execution.result.exit_code, 7)
+        self.assertEqual(execution.result.metadata, {"container_id": "cid"})
 
     def test_all_batch_requests_exist_before_first_effect(self):
         observed = []

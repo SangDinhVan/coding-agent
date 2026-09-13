@@ -1,0 +1,16 @@
+services:
+  coding-agent:
+    build: .
+    stdin_open: true
+    tty: true
+    working_dir: ${PWD}
+    env_file:
+      - .env
+    environment:
+      DOCKER_HOST: unix:///var/run/docker.sock
+      WORKSPACE: ${PWD}
+      STATE_ROOT: ${HOME}/.local/state/sang-coding-agent
+    volumes:
+      - .:${PWD}
+      - ${HOME}/.local/state/sang-coding-agent:${HOME}/.local/state/sang-coding-agent
+      - ${XDG_RUNTIME_DIR}/docker.sock:/var/run/docker.sock

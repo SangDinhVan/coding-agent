@@ -11,7 +11,9 @@ from pathlib import Path
 from typing import Any, Iterator, Optional
 from uuid import uuid4
 
-DEFAULT_CHATS_DIR = Path("memory/chats")
+from core.paths import ControlPaths
+
+DEFAULT_CHATS_DIR = ControlPaths.default_root() / "chats"
 SCHEMA_VERSION = 1
 _SECRET_KEYS = {"password", "secret", "token", "api_key", "authorization", "credential"}
 _MESSAGE_EVENT_TYPES = {
