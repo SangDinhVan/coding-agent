@@ -9,10 +9,11 @@ rootless Docker child container.
 
 New sessions use a **live workspace**: the host repository is bind-mounted RW at
 `/workspace`, so successful tool writes are visible immediately in the host IDE
-and `git diff`. Existing sensitive and ignored paths discovered when the session
-is created are over-mounted with protected empty read-only file/directory masks.
-The child receives neither the rootless Docker socket nor host paths outside the
-workspace.
+and `git diff`. Existing sensitive paths, explicit `.agentignore` selections,
+and known cache/build directories are over-mounted with protected empty
+read-only file/directory masks. Ordinary `.gitignore` entries remain writable;
+Git versioning policy is not an access-control boundary. The child receives
+neither the rootless Docker socket nor host paths outside the workspace.
 
 > **Important:** live changes are already applied. `/apply` is unnecessary and
 > `/discard` only closes the sandbox; it does not restore repository files.
@@ -119,9 +120,13 @@ model or tool execution. Legacy metadata may omit only the mode label.
   limits remain active.
 - No Docker socket, host home, inherited credentials, or paths outside the
   selected workspace are mounted into the child.
-- Existing `.git`, `.env*`, credential, Git-ignored, cache, and paths selected
-  by `.agentignore` are hidden with empty read-only bind mounts from protected
-  state.
+- Existing `.git`, `.env*`, credential paths, known cache/build directories,
+  and paths selected by `.agentignore` are hidden with empty read-only bind
+  mounts from protected state. Ordinary `.gitignore` entries remain accessible
+  and writable in live mode.
+- Mask sets are persisted per session. Start a new session after changing mask
+  policy or ignore configuration; resume intentionally reconciles the original
+  session contract.
 - A runtime inspect/probe verifies the exact contract after start and resume;
   mismatch stops the container and fails closed.
 

@@ -240,11 +240,12 @@ class RootlessLiveWorkspaceIntegrationTests(unittest.TestCase):
     def exec(self, command, timeout=5):
         return self.session.exec(ExecRequest(uuid.uuid4().hex, command, SandboxPath("."), timeout))
 
-    def test_live_writes_are_immediate_masked_and_owned_by_host_user(self):
+    def test_live_writes_are_immediate_security_masked_and_owned_by_host_user(self):
         result = self.exec(
             "set -e; printf 'print(2)\\n' > main.py; printf created > created.txt; "
             "test -f .env; test ! -s .env; "
-            "test ! -e .git/config; test ! -e ignored/secret.txt; "
+            "test ! -e .git/config; test -f ignored/secret.txt; "
+            "printf generated > ignored/output.txt; "
             "if printf exposed > .env 2>/dev/null; then exit 1; fi; "
             "test ! -S /var/run/docker.sock"
         )
@@ -253,6 +254,7 @@ class RootlessLiveWorkspaceIntegrationTests(unittest.TestCase):
         created = self.source / "created.txt"
         self.assertEqual(created.read_text(encoding="utf-8"), "created")
         self.assertEqual(created.stat().st_uid, os.getuid())
+        self.assertEqual((self.source / "ignored" / "output.txt").read_text(encoding="utf-8"), "generated")
         self.assertEqual((self.source / ".env").read_text(encoding="utf-8"), "TOP_SECRET=host-canary\n")
         self.assertEqual((self.source / ".git" / "config").read_text(encoding="utf-8"), "private")
 

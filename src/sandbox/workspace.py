@@ -231,7 +231,6 @@ def prepare_live_workspace(
     if shutil.disk_usage(paths.session_dir).free < free_space_floor_bytes:
         raise SnapshotError("host free space is below the safety floor")
     agent_patterns = _read_patterns(source / ".agentignore")
-    ignored = _git_ignored(source)
     included, excluded, rejected = [], [], []
     total = 0
     seen = set()
@@ -257,7 +256,7 @@ def prepare_live_workspace(
                 reason = "hard_security_denylist"
             elif _matches(relative, agent_patterns):
                 reason = "project_agentignore"
-            elif relative in ignored or _matches(relative, _PERFORMANCE_PATTERNS):
+            elif _matches(relative, _PERFORMANCE_PATTERNS):
                 reason = "performance_exclude"
             if reason:
                 excluded.append(_entry(relative, "directory" if is_directory else "file", reason=reason))

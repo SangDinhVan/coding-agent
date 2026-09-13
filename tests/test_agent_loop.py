@@ -85,6 +85,22 @@ class AgentLoopCharacterizationTests(unittest.TestCase):
                 self.assertEqual(agent.run_turn("goal"), "")
             self.assertEqual([m["role"] for m in agent.event_store.to_messages()], ["user"])
 
+    def test_turn_reports_model_wait(self):
+        with tempfile.TemporaryDirectory() as directory:
+            agent = self.agent(directory)
+            with patch("agent.loop.llm.complete", return_value=stream_text("done")), patch("builtins.print") as output:
+                agent.run_turn("goal")
+            self.assertTrue(any("waiting for response" in str(call) for call in output.call_args_list))
+
+    def test_large_tool_call_reports_streamed_size(self):
+        with tempfile.TemporaryDirectory() as directory:
+            agent = self.agent(directory)
+            chunks = stream_tool_call("call-1", "fake", '{"content":"' + "x" * 9000 + '"}')
+            with patch("builtins.print") as output:
+                _, calls = agent._consume_stream(chunks)
+            self.assertEqual(len(calls[0].function.arguments), 9014)
+            self.assertTrue(any("receiving tool call" in str(call) and "KiB" in str(call) for call in output.call_args_list))
+
 
 if __name__ == "__main__":
     unittest.main()

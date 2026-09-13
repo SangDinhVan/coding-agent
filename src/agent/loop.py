@@ -185,6 +185,7 @@ class Agent:
         full_text = ""
         calls = {}
         started_printing = False
+        reported_tool_bytes = 0
         for chunk in response:
             if not chunk.choices:
                 continue
@@ -209,6 +210,11 @@ class Agent:
                 if function is not None:
                     accumulated.function.name += getattr(function, "name", None) or ""
                     accumulated.function.arguments += getattr(function, "arguments", None) or ""
+            tool_bytes = sum(len(call.function.arguments.encode("utf-8")) for call in calls.values())
+            if tool_bytes - reported_tool_bytes >= 8 * 1024:
+                reported_tool_bytes = tool_bytes
+                names = ", ".join(call.function.name or "tool" for call in calls.values())
+                print(f"[model] receiving tool call {names}: {tool_bytes / 1024:.1f} KiB", flush=True)
         if started_printing:
             print()
         return full_text, [calls[index] for index in sorted(calls)]
@@ -320,6 +326,7 @@ class Agent:
                 {"iteration": turn.iteration + 1}, turn_id=turn_id,
             )
             try:
+                print(f"[model] waiting for response (iteration {turn.iteration + 1})...", flush=True)
                 response = llm.complete(
                     messages=self._build_context(),
                     tools=self.tool_registry.schemas() + [self.plan_tool.schema()],

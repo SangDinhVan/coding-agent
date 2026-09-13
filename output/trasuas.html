@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Trà Sữa Nhà Làm — Ngọt ngào từng giọt</title>
+<meta name="description" content="Trà sữa nhà làm: trà đào, matcha, socola, taro. Mua online, giao nhanh, giảm 20% đơn đầu." />
+<style>
+  :root{
+    --brown:#4b2e2b;
+    --brown-dark:#33201d;
+    --cream:#fff8f0;
+    --peach:#ffd9c0;
+    --accent:#e2725b;
+    --accent-dark:#c9583f;
+    --teal:#2f6f5e;
+    --shadow:0 10px 30px rgba(75,46,43,.15);
+    --radius:18px;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html{scroll-behavior:smooth;}
+  body{
+    font-family:"Segoe UI", system-ui, -apple-system, Roboto, Arial, sans-serif;
+    background:var(--cream);
+    color:var(--brown);
+    line-height:1.6;
+  }
+  img{max-width:100%;display:block;}
+  a{color:inherit;}
+  .container{width:min(1100px,92%);margin:0 auto;}
+
+  /* ===== Header ===== */
+  header{
+    position:sticky;top:0;z-index:50;
+    background:rgba(255,248,240,.92);
+    backdrop-filter:blur(8px);
+    border-bottom:1px solid rgba(75,46,43,.12);
+  }
+  .nav{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:14px 0;gap:16px;
+  }
+  .logo{display:flex;align-items:center;gap:10px;font-weight:800;font-size:1.25rem;letter-spacing:.3px;}
+  .logo-badge{
+    width:40px;height:40px;border-radius:12px;
+    background:linear-gradient(135deg,var(--accent),var(--peach));
+    display:grid;place-items:center;font-size:1.3rem;
+    box-shadow:var(--shadow);
+  }
+  nav ul{display:flex;gap:22px;list-style:none;}
+  nav a{text-decoration:none;font-weight:600;font-size:.95rem;opacity:.85;transition:.2s;}
+  nav a:hover{opacity:1;color:var(--accent);}
+  .btn{
+    display:inline-block;border:none;cursor:pointer;
+    padding:12px 26px;border-radius:999px;
+    background:var(--accent);color:#fff;font-weight:700;font-size:1rem;
+    box-shadow:var(--shadow);text-decoration:none;transition:.2s;
+  }
+  .btn:hover{background:var(--accent-dark);transform:translateY(-2px);}
+  .btn.ghost{background:transparent;color:var(--accent);border:2px solid var(--accent);box-shadow:none;}
+  .btn.ghost:hover{background:var(--accent);color:#fff;}
+
+  /* ===== Hero ===== */
+  .hero{
+    padding:70px 0 90px;
+    background:
+      radial-gradient(600px 300px at 85% 10%, rgba(226,114,91,.18), transparent 60%),
+      radial-gradient(500px 260px at 10% 90%, rgba(47,111,94,.14), transparent 60%);
+  }
+  .hero-grid{display:grid;grid-template-columns:1.1fr .9fr;gap:40px;align-items:center;}
+  .tag{
+    display:inline-block;background:var(--peach);color:var(--accent-dark);
+    font-weight:700;font-size:.85rem;padding:6px 14px;border-radius:999px;margin-bottom:16px;
+  }
+  .hero h1{font-size:clamp(2.2rem,4.5vw,3.4rem);line-height:1.15;font-weight:800;margin-bottom:18px;}
+  .hero h1 span{color:var(--accent);}
+  .hero p.lead{font-size:1.1rem;opacity:.85;margin-bottom:28px;max-width:52ch;}
+  .hero-cta{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:30px;}
+  .stats{display:flex;gap:34px;flex-wrap:wrap;}
+  .stat b{display:block;font-size:1.5rem;}
+  .stat small{opacity:.7;}
+
+  .hero-art{position:relative;display:grid;place-items:center;}
+  .cup{
+    width:230px;height:300px;position:relative;
+    filter:drop-shadow(0 24px 24px rgba(75,46,43,.25));
+    animation:float 5s ease-in-out infinite;
+  }
+  @keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-14px)}}
+  .cup .body{
+    position:absolute;left:20px;bottom:0;width:190px;height:250px;
+    background:linear-gradient(180deg,#fff 0%,#fff 18%,#f7dfc9 18%,#e8c39e 60%,#d8a878 100%);
+    border-radius:0 0 34px 34px / 0 0 60px 60px;
+    clip-path:polygon(0 0,100% 0,84% 100%,16% 100%);
+    overflow:hidden;
+  }
+  .cup .milk{
+    position:absolute;bottom:0;left:0;width:100%;height:34%;
+    background:linear-gradient(180deg,#fffdf9,#f3e5d3);
+  }
+  .cup .pearls{position:absolute;bottom:6px;left:0;width:100%;height:40px;display:flex;justify-content:center;gap:7px;flex-wrap:wrap;padding:0 18px;}
+  .pearls i{width:14px;height:14px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#6b4a3f,#2c1712);}
+  .cup .lid{
+    position:absolute;top:22px;left:8px;width:214px;height:26px;
+    background:linear-gradient(180deg,#fff,#e9dccd);
+    border-radius:12px;
+    box-shadow:0 3px 6px rgba(75,46,43,.2);
+  }
+  .cup .straw{
+    position:absolute;top:-34px;left:118px;width:14px;height:120px;
+    background:repeating-linear-gradient(45deg,var(--accent) 0 10px,#fff 10px 20px);
+    border-radius:8px;transform:rotate(12deg);
+    transform-origin:bottom center;
+  }
+  .bubble{position:absolute;border-radius:50%;background:rgba(226,114,91,.25);animation:rise 6s linear infinite;}
+  @keyframes rise{0%{transform:translateY(0);opacity:0}20%{opacity:1}100%{transform:translateY(-140px);opacity:0}}
+  .b1{width:16px;height:16px;left:8%;bottom:20%;animation-delay:0s;}
+  .b2{width:10px;height:10px;left:80%;bottom:30%;animation-delay:2s;}
+  .b3{width:13px;height:13px;left:25%;bottom:10%;animation-delay:4s;}
+
+  /* ===== Sections ===== */
+  section{padding:70px 0;}
+  .sec-head{text-align:center;max-width:640px;margin:0 auto 44px;}
+  .sec-head h2{font-size:2rem;font-weight:800;margin-bottom:10px;}
+  .sec-head p{opacity:.8;}
+
+  /* ===== Menu ===== */
+  .menu-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:24px;}
+  .card{
+    background:#fff;border-radius:var(--radius);overflow:hidden;
+    box-shadow:var(--shadow);transition:.25s;
+    display:flex;flex-direction:column;
+  }
+  .card:hover{transform:translateY(-6px);}
+  .card .thumb{
+    height:150px;display:grid;place-items:center;font-size:3.4rem;
+  }
+  .t1{background:linear-gradient(135deg,#ffe4d6,#ffc9a8);}
+  .t2{background:linear-gradient(135deg,#ddefe3,#b7dcc8);}
+  .t3{background:linear-gradient(135deg,#e8d9f0,#cfb4e0);}
+  .t4{background:linear-gradient(135deg,#fde2e2,#f6bcbc);}
+  .t5{background:linear-gradient(135deg,#fff3cf,#ffe08a);}
+  .t6{background:linear-gradient(135deg,#dbeefb,#a9d4f5);}
+  .card .info{padding:18px 20px 22px;display:flex;flex-direction:column;flex:1;}
+  .card h3{font-size:1.1rem;margin-bottom:6px;display:flex;justify-content:space-between;gap:8px;}
+  .card h3 .price{color:var(--accent-dark);white-space:nowrap;}
+  .card p{font-size:.9rem;opacity:.75;flex:1;margin-bottom:14px;}
+  .badge-new{
+    font-size:.7rem;font-weight:800;background:var(--teal);color:#fff;
+    padding:2px 8px;border-radius:999px;vertical-align:middle;margin-left:6px;
+  }
+  .qty{display:flex;align-items:center;gap:10px;margin-bottom:12px;}
+  .qty button{
+    width:32px;height:32px;border-radius:50%;border:none;cursor:pointer;
+    background:var(--peach);color:var(--brown);font-size:1.1rem;font-weight:800;transition:.15s;
+  }
+  .qty button:hover{background:var(--accent);color:#fff;}
+  .qty span{min-width:26px;text-align:center;font-weight:700;}
+  .add{
+    width:100%;border:none;cursor:pointer;padding:11px;border-radius:12px;
+    background:var(--brown);color:#fff;font-weight:700;font-size:.95rem;transition:.2s;
+  }
+  .add:hover{background:var(--accent);}
+
+  /* ===== About / USPs ===== */
+  .about{background:var(--brown);color:var(--cream);}
+  .about .sec-head h2{color:#fff;}
+  .about .sec-head p{opacity:.85;}
+  .usp-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:22px;}
+  .usp{
+    background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.14);
+    border-radius:var(--radius);padding:26px 22px;text-align:center;
+  }
+  .usp .ico{font-size:2.2rem;margin-bottom:12px;}
+  .usp h3{font-size:1.05rem;margin-bottom:8px;}
+  .usp p{font-size:.9rem;opacity:.8;}
+
+  /* ===== Testimonials ===== */
+  .testi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:22px;}
+  .testi{
+    background:#fff;border-radius:var(--radius);padding:24px;box-shadow:var(--shadow);
+  }
+  .stars{color:#f5a623;letter-spacing:2px;margin-bottom:10px;}
+  .testi p{font-size:.95rem;opacity:.85;margin-bottom:14px;font-style:italic;}
+  .who{display:flex;align-items:center;gap:12px;}
+  .avatar{
+    width:42px;height:42px;border-radius:50%;display:grid;place-items:center;
+    font-weight:800;color:#fff;background:var(--teal);
+  }
+  .who small{display:block;opacity:.6;}
+
+  /* ===== CTA band ===== */
+  .cta-band{
+    background:linear-gradient(120deg,var(--accent),#e8956b);
+    border-radius:26px;color:#fff;text-align:center;
+    padding:52px 24px;box-shadow:var(--shadow);
+  }
+  .cta-band h2{font-size:1.8rem;margin-bottom:10px;}
+  .cta-band p{margin-bottom:22px;opacity:.95;}
+  .cta-band .btn{background:#fff;color:var(--accent-dark);}
+  .cta-band .btn:hover{background:var(--peach);}
+
+  /* ===== Footer ===== */
+  footer{background:var(--brown-dark);color:#f3e6dc;padding:44px 0 24px;margin-top:70px;}
+  .foot-grid{display:grid;grid-template-columns:2fr 1fr 1fr;gap:30px;margin-bottom:30px;}
+  footer h4{margin-bottom:12px;color:#fff;}
+  footer li{list-style:none;margin-bottom:8px;font-size:.92rem;opacity:.85;}
+  footer a{text-decoration:none;opacity:.85;}
+  footer a:hover{color:var(--peach);}
+  .copy{border-top:1px solid rgba(255,255,255,.15);padding-top:18px;text-align:center;font-size:.85rem;opacity:.7;}
+
+  /* ===== Cart drawer ===== */
+  .overlay{
+    position:fixed;inset:0;background:rgba(0,0,0,.45);opacity:0;pointer-events:none;
+    transition:.3s;z-index:90;
+  }
+  .overlay.show{opacity:1;pointer-events:auto;}
+  .cart{
+    position:fixed;top:0;right:-420px;width:min(400px,92vw);height:100vh;z-index:100;
+    background:#fff;box-shadow:-12px 0 40px rgba(0,0,0,.2);
+    display:flex;flex-direction:column;transition:right .35s ease;
+  }
+  .cart.open{right:0;}
+  .cart-head{
+    padding:20px 22px;border-bottom:1px solid rgba(75,46,43,.12);
+    display:flex;justify-content:space-between;align-items:center;
+  }
+  .cart-head h3{font-size:1.2rem;}
+  .close-cart{
+    border:none;background:var(--peach);width:36px;height:36px;border-radius:50%;
+    font-size:1.1rem;cursor:pointer;font-weight:800;color:var(--brown);
+  }
+  .cart-items{flex:1;overflow-y:auto;padding:18px 22px;display:flex;flex-direction:column;gap:14px;}
+  .empty-cart{text-align:center;opacity:.6;margin-top:60px;}
+  .empty-cart .emo{font-size:3rem;margin-bottom:10px;}
+  .ci{
+    display:flex;align-items:center;gap:12px;
+    background:var(--cream);border-radius:14px;padding:12px 14px;
+  }
+  .ci .emo{font-size:1.8rem;}
+  .ci .meta{flex:1;}
+  .ci .meta b{font-size:.95rem;display:block;}
+  .ci .meta small{opacity:.7;}
+  .ci .line-total{font-weight:800;color:var(--accent-dark);white-space:nowrap;}
+  .ci .rm{border:none;background:none;cursor:pointer;font-size:1rem;opacity:.5;}
+  .ci .rm:hover{opacity:1;}
+  .cart-foot{padding:18px 22px;border-top:1px solid rgba(75,46,43,.12);}
+  .total-row{display:flex;justify-content:space-between;font-size:1.15rem;font-weight:800;margin-bottom:6px;}
+  .note{font-size:.8rem;opacity:.6;margin-bottom:14px;}
+  .checkout{
+    width:100%;border:none;cursor:pointer;padding:14px;border-radius:14px;
+    background:var(--accent);color:#fff;font-weight:800;font-size:1.05rem;transition:.2s;
+  }
+  .checkout:hover{background:var(--accent-dark);}
+
+  /* cart count badge */
+  .cart-btn{position:relative;}
+  .cart-count{
+    position:absolute;top:-8px;right:-8px;min-width:22px;height:22px;padding:0 5px;
+    background:var(--accent-dark);color:#fff;border-radius:999px;
+    font-size:.75rem;font-weight:800;display:grid;place-items:center;
+  }
+
+  /* toast */
+  .toast{
+    position:fixed;bottom:24px;left:50%;transform:translate(-50%,80px);
+    background:var(--brown);color:#fff;padding:13px 26px;border-radius:999px;
+    font-weight:600;box-shadow:var(--shadow);z-index:120;transition:.35s;opacity:0;
+  }
+  .toast.show{transform:translate(-50%,0);opacity:1;}
+
+  /* ===== Responsive ===== */
+  @media (max-width:860px){
+    .hero-grid{grid-template-columns:1fr;text-align:center;}
+    .hero p.lead{margin:0 auto 28px;}
+    .hero-cta,.stats{justify-content:center;}
+    .hero-art{margin-top:20px;}
+    nav ul{display:none;}
+    .foot-grid{grid-template-columns:1fr;}
+    .cart{top:auto;bottom:0;height:auto;max-height:85vh;width:100%;right:0;
+      transform:translateY(100%);transition:transform .35s ease;border-radius:24px 24px 0 0;}
+    .cart.open{transform:translateY(0);}
+  }
+</style>
+</head>
+<body>
+
+<!-- ===== HEADER ===== -->
+<header>
+  <div class="container nav">
+    <div class="logo">
+      <div class="logo-badge">🧋</div>
+      <span>Trà Sữa Nhà Làm</span>
+    </div>
+    <nav>
+      <ul>
+        <li><a href="#menu">Thực đơn</a></li>
+        <li><a href="#ve">Về chúng tôi</a></li>
+        <li><a href="#danhgia">Đánh giá</a></li>
+        <li><a href="#lienhe">Liên hệ</a></li>
+      </ul>
+    </nav>
+    <button class="btn cart-btn" id="cartToggle" aria-label="Mở giỏ hàng">
+      🛒 Giỏ hàng
+      <span class="cart-count" id="cartCount">0</span>
+    </button>
+  </div>
+</header>
+
+<!-- ===== HERO ===== -->
+<section class="hero">
+  <div class="container hero-grid">
+    <div>
+      <span class="tag">🔥 Giảm 20% cho đơn hàng đầu tiên</span>
+      <h1>Trà sữa <span>nhà làm</span>,<br>ngọt ngào từng giọt</h1>
+      <p class="lead">
+        Trà tươi hãm mỗi sáng, sữa béo chuẩn vị, topping nấu thủ công mỗi ngày.
+        Đặt online — giao tận nơi trong 30 phút.
+      </p>
+      <div class="hero-cta">
+        <a href="#menu" class="btn">Xem thực đơn</a>
+        <a href="#lienhe" class="btn ghost">Đặt qua Zalo</a>
+      </div>
+      <div class="stats">
+        <div class="stat"><b>5.000+</b><small>khách hài lòng</small></div>
+        <div class="stat"><b>12</b><small>thức uống hot</small></div>
+        <div class="stat"><b>30'</b><small>giao nhanh</small></div>
+      </div>
+    </div>
+    <div class="hero-art" aria-hidden="true">
+      <div class="cup">
+        <div class="straw"></div>
+        <div class="lid"></div>
+        <div class="body">
+          <div class="milk"></div>
+          <div class="pearls">
+            <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+            <i></i><i></i><i></i><i></i><i></i>
+          </div>
+        </div>
+      </div>
+      <span class="bubble b1"></span>
+      <span class="bubble b2"></span>
+      <span class="bubble b3"></span>
+    </div>
+  </div>
+</section>
+
+<!-- ===== MENU ===== -->
+<section id="menu">
+  <div class="container">
+    <div class="sec-head">
+      <h2>Thực đơn best-seller</h2>
+      <p>Tất cả đều có 3 mức đường (đầy / 75% / 50% / ít) và nhiều topping miễn phí thêm.</p>
+    </div>
+    <div class="menu-grid" id="menuGrid"><!-- render bằng JS --></div>
+  </div>
+</section>
+
+<!-- ===== ABOUT ===== -->
+<section class="about" id="ve">
+  <div class="container">
+    <div class="sec-head">
+      <h2>Vì sao chọn Trà Sữa Nhà Làm?</h2>
+      <p>Không chất bảo quản, không pha sẵn công nghiệp — chỉ nguyên liệu tươi và sự tỉ mỉ.</p>
+    </div>
+    <div class="usp-grid">
+      <div class="usp">
+        <div class="ico">🍃</div>
+        <h3>Trà tươi mỗi ngày</h3>
+        <p>Lá trà tuyển chọn, hãm tươi sáng nào, không dùng trà trộn hương liệu.</p>
+      </div>
+      <div class="usp">
+        <div class="ico">🥛</div>
+        <h3>Sữa tươi &amp; cream cheese</h3>
+        <p>Sữa tươi tiệt trùng, cream cheese nhập khẩu, topping pearl tự nấu.</p>
+      </div>
+      <div class="usp">
+        <div class="ico">🚴</div>
+        <h3>Giao nhanh 30 phút</h3>
+        <p>Phạm vi 5km quanh khu trung tâm, đóng gói chống tràn chuẩn chỉnh.</p>
+      </div>
+      <div class="usp">
+        <div class="ico">💰</div>
+        <h3>Giá sinh viên</h3>
+        <p>Chỉ từ 25.000đ/cốc, freeship đơn từ 80.000đ. Sinh viên giảm thêm 10%.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== TESTIMONIALS ===== -->
+<section id="danhgia">
+  <div class="container">
+    <div class="sec-head">
+      <h2>Khách nói gì về chúng tôi</h2>
+      <p>Hơn 5.000 đánh giá 5 sao từ những người nghiện trà sữa đúng nghĩa.</p>
+    </div>
+    <div class="testi-grid">
+      <div class="testi">
+        <div class="stars">★★★★★</div>
+        <p>"Trà đào osmanthus ngon nhất quận luôn! Delivery tới còn ấm,珍珠 dai dai đúng điệu."</p>
+        <div class="who">
+          <div class="avatar">H</div>
+          <div><b>Hoài Anh</b><small>Khách quen 2 năm</small></div>
+        </div>
+      </div>
+      <div class="testi">
+        <div class="stars">★★★★★</div>
+        <p>"Matcha của các bạn đậm và béo, không bị đắng. Mình đặt tuần 3 lần, đã nghiện rồi."</p>
+        <div class="who">
+          <div class="avatar" style="background:var(--accent)">M</div>
+          <div><b>Minh Quân</b><small>Đặt online</small></div>
+        </div>
+      </div>
+      <div class="testi">
+        <div class="stars">★★★★★</div>
+        <p>"Giá sinh viên mà chất lượng tiệm xịn. Nhân viên dễ thương, ghi chú đường/đá đúng ý."</p>
+        <div class="who">
+          <div class="avatar" style="background:#8a5fc7">T</div>
+          <div><b>Thùy Linh</b><small>Sinh viên ĐHQG</small></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== CTA ===== -->
+<section id="lienhe">
+  <div class="container">
+    <div class="cta-band">
+      <h2>Đói ngọt chưa? 🧋</h2>
+      <p>Đặt ngay hôm nay — nhập mã <b>TRASUA20</b> khi thanh toán để giảm 20% đơn đầu tiên.</p>
+      <a href="#menu" class="btn">Chọn trà sữa ngay</a>
+    </div>
+  </div>
+</section>
+
+<!-- ===== FOOTER ===== -->
+<footer>
+  <div class="container">
+    <div class="foot-grid">
+      <div>
+        <div class="logo" style="color:#fff;margin-bottom:12px;">
+          <div class="logo-badge">🧋</div>
+          <span>Trà Sữa Nhà Làm</span>
+        </div>
+        <p style="opacity:.8;font-size:.92rem;max-width:38ch;">
+          123 Đường Sương Mù, Quận 1, TP.HCM<br />
+          Mở cửa: 07:00 – 22:00, tất cả các ngày.
+        </p>
+      </div>
+      <div>
+        <h4>Liên hệ</h4>
+        <ul>
+          <li>📞 0901 234 567</li>
+          <li>💬 Zalo: trasuamahay</li>
+          <li>✉️ hello@trasuamahay.vn</li>
+        </ul>
+      </div>
+      <div>
+        <h4>Mạng xã hội</h4>
+        <ul>
+          <li><a href="#">Facebook</a></li>
+          <li><a href="#">TikTok</a></li>
+          <li><a href="#">Shopee Food</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="copy">© 2025 Trà Sữa Nhà Làm — Ngọt ngào từng giọt. Made with 🤎</div>
+  </div>
+</footer>
+
+<!-- ===== CART DRAWER ===== -->
+<div class="overlay" id="overlay"></div>
+<aside class="cart" id="cart" aria-label="Giỏ hàng">
+  <div class="cart-head">
+    <h3>🛒 Giỏ hàng</h3>
+    <button class="close-cart" id="closeCart" aria-label="Đóng giỏ hàng">✕</button>
+  </div>
+  <div class="cart-items" id="cartItems"></div>
+  <div class="cart-foot">
+    <div class="total-row"><span>Tổng cộng</span><span id="cartTotal">0đ</span></div>
+    <div class="note">Freeship cho đơn từ 80.000đ · Nhập mã TRASUA20 giảm 20%</div>
+    <button class="checkout" id="checkoutBtn">Đặt hàng qua Zalo</button>
+  </div>
+</aside>
+
+<div class="toast" id="toast"></div>
+
+<script>
+  // ===== Dữ liệu sản phẩm =====
+  const PRODUCTS = [
+    {id:1, name:"Trà Sữa Classic",  price:25000, emoji:"🧋", bg:"t1", desc:"Trà đen nguyên chất, sữa tươi béo nhẹ,珍珠 dai — vị quen thuộc được yêu nhất."},
+    {id:2, name:"Trà Đào Osmanthus", price:32000, emoji:"🍑", bg:"t2", desc:"Đào tươi cắt lát, hoa nhài khô, trà xanh thanh mát. Hơi lạnh nhẹ, ngọt dịu.", isNew:true},
+    {id:3, name:"Matcha Taro",       price:38000, emoji:"🍵", bg:"t3", desc:"Matcha Nhật trộn sữa tươi, lớp taro tím mềm mịn. Đậm vị, béo thơm.", isNew:true},
+    {id:4, name:"Socola Đá Xoay",    price:35000, emoji:"🍫", bg:"t4", desc:"Socola 64% tan chảy trong lớp sữa, đá viên lạnh, vị đắng dịu chuẩn."},
+    {id:5, name:"Sữa Chua Oat",      price:30000, emoji:"🥛", bg:"t5", desc:"Sữa chua hy lạp, yến mạch, mật ong rừng. Thanh nhẹ, hợp dân ít ngọt.", isNew:true},
+    {id:6, name:"Trà Xanh Lemon",    price:22000, emoji:"🍋", bg:"t6", desc:"Trà xanh matcha loãng, chanh tươi, đá lạnh — giải nhiệt cực chill."}
+  ];
+
+  const cart = new Map(); // id -> qty
+  const $ = s => document.querySelector(s);
+
+  const fmt = n => n.toLocaleString("vi-VN") + "đ";
+
+  // ===== Render menu =====
+  function renderMenu(){
+    $("#menuGrid").innerHTML = PRODUCTS.map(p => `
+      <article class="card">
+        <div class="thumb ${p.bg}">${p.emoji}</div>
+        <div class="info">
+          <h3>
+            <span>${p.name}${p.isNew ? '<span class="badge-new">MỚI</span>' : ''}</span>
+            <span class="price">${fmt(p.price)}</span>
+          </h3>
+          <p>${p.desc}</p>
+          <div class="qty">
+            <button data-act="dec" data-id="${p.id}" aria-label="Giảm">−</button>
+            <span id="qty-${p.id}">1</span>
+            <button data-act="inc" data-id="${p.id}" aria-label="Tăng">+</button>
+          </div>
+          <button class="add" data-act="add" data-id="${p.id}">Thêm vào giỏ</button>
+        </div>
+      </article>
+    `).join("");
+  }
+
+  // ===== Toast =====
+  let toastTimer;
+  function toast(msg){
+    const t = $("#toast");
+    t.textContent = msg;
+    t.classList.add("show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(()=>t.classList.remove("show"), 2200);
+  }
+
+  // ===== Giỏ hàng =====
+  function cartCount(){
+    let n = 0; cart.forEach(q => n += q); return n;
+  }
+  function cartTotal(){
+    let s = 0;
+    cart.forEach((q, id) => s += PRODUCTS.find(p => p.id === id).price * q);
+    return s;
+  }
+  function renderCart(){
+    const box = $("#cartItems");
+    if (cart.size === 0){
+      box.innerHTML = `<div class="empty-cart"><div class="emo">🧋</div>Giỏ hàng đang trống…<br/>Chọn một ly trà sữa ngon nhé!</div>`;
+    } else {
+      box.innerHTML = [...cart.entries()].map(([id, q]) => {
+        const p = PRODUCTS.find(x => x.id === id);
+        return `
+          <div class="ci">
+            <span class="emo">${p.emoji}</span>
+            <div class="meta">
+              <b>${p.name}</b>
+              <small>${fmt(p.price)} × ${q}</small>
+            </div>
+            <span class="line-total">${fmt(p.price * q)}</span>
+            <button class="rm" data-rm="${id}" aria-label="Xoá ${p.name}">🗑</button>
+          </div>`;
+      }).join("");
+    }
+    $("#cartTotal").textContent = fmt(cartTotal());
+    $("#cartCount").textContent = cartCount();
+  }
+
+  function addToCart(id, qty){
+    cart.set(id, (cart.get(id) || 0) + qty);
+    renderCart();
+    const p = PRODUCTS.find(x => x.id === id);
+    toast(`Đã thêm ${p.name} vào giỏ 🧋`);
+  }
+
+  // ===== Drawer =====
+  function openCart(){
+    $("#cart").classList.add("open");
+    $("#overlay").classList.add("show");
+  }
+  function closeCart(){
+    $("#cart").classList.remove("open");
+    $("#overlay").classList.remove("show");
+  }
+
+  // ===== Sự kiện =====
+  document.addEventListener("click", e => {
+    const btn = e.target.closest("[data-act]");
+    if (btn){
+      const id = +btn.dataset.id;
+      const qtyEl = document.getElementById("qty-" + id);
+      if (btn.dataset.act === "inc"){
+        qtyEl.textContent = +qtyEl.textContent + 1;
+      } else if (btn.dataset.act === "dec"){
+        qtyEl.textContent = Math.max(1, +qtyEl.textContent - 1);
+      } else if (btn.dataset.act === "add"){
+        addToCart(id, +qtyEl.textContent);
+        qtyEl.textContent = 1;
+      }
+      return;
+    }
+    const rm = e.target.closest("[data-rm]");
+    if (rm){
+      cart.delete(+rm.dataset.rm);
+      renderCart();
+      toast("Đã xoá khỏi giỏ");
+    }
+  });
+
+  $("#cartToggle").addEventListener("click", openCart);
+  $("#closeCart").addEventListener("click", closeCart);
+  $("#overlay").addEventListener("click", closeCart);
+  document.addEventListener("keydown", e => { if (e.key === "Escape") closeCart(); });
+
+  $("#checkoutBtn").addEventListener("click", () => {
+    if (cart.size === 0){ toast("Giỏ hàng trống — chọn trà trước nha! 😅"); return; }
+    let lines = ["*Đặt hàng — Trà Sữa Nhà Làm*", ""];
+    cart.forEach((q, id) => {
+      const p = PRODUCTS.find(x => x.id === id);
+      lines.push(`- ${p.name} × ${q} — ${fmt(p.price * q)}`);
+    });
+    lines.push("", `Tổng: ${fmt(cartTotal())}`, "", "Mã: TRASUA20 (giảm 20%)");
+    const text = encodeURIComponent(lines.join("\n"));
+    window.open(`https://zalo.me/0901234567?text=${text}`, "_blank");
+    toast("Mở Zalo để xác nhận đơn 📲");
+  });
+
+  // ===== Khởi tạo =====
+  renderMenu();
+  renderCart();
+</script>
+</body>
+</html>

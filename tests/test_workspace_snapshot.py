@@ -125,12 +125,15 @@ class LiveWorkspaceTests(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
         return path
-    def test_prepares_read_only_masks_without_mutating_source(self):
+    def test_live_masks_security_agentignore_and_caches_but_not_gitignored_paths(self):
         keep = self.write("src/main.py", "print('ok')")
         secret = self.write(".env", "API_KEY=hidden")
         self.write("nested/client_credentials_prod.json", "hidden")
-        self.write("cache/value.bin", "ignored")
-        self.write(".gitignore", "cache/\n")
+        generated = self.write("output/index.html", "generated")
+        self.write("build/value.bin", "cache")
+        self.write("private/internal.cfg", "private")
+        self.write(".gitignore", "output/\n")
+        self.write(".agentignore", "private/\n")
         self.write(".git/config", "private")
         before = {
             path.relative_to(self.source).as_posix(): (path.read_bytes(), path.stat().st_mode)
@@ -140,15 +143,20 @@ class LiveWorkspaceTests(unittest.TestCase):
         manifest = prepare_live_workspace(self.source, self.paths, free_space_floor_bytes=0)
 
         excluded = {str(entry.path): entry for entry in manifest.excluded}
+        included = {str(entry.path): entry for entry in manifest.included}
         self.assertEqual(excluded[".git"].kind, "directory")
         self.assertEqual(excluded[".env"].kind, "file")
         self.assertIn("nested/client_credentials_prod.json", excluded)
-        self.assertIn("cache", excluded)
+        self.assertIn("private", excluded)
+        self.assertIn("build", excluded)
+        self.assertIn("output", included)
+        self.assertIn("output/index.html", included)
         self.assertTrue(self.paths.mask_directory.is_dir())
         self.assertTrue(self.paths.mask_file.is_file())
         self.assertEqual(self.paths.mask_file.read_bytes(), b"")
         self.assertEqual(keep.read_text(encoding="utf-8"), "print('ok')")
         self.assertEqual(secret.read_text(encoding="utf-8"), "API_KEY=hidden")
+        self.assertEqual(generated.read_text(encoding="utf-8"), "generated")
         after = {
             path.relative_to(self.source).as_posix(): (path.read_bytes(), path.stat().st_mode)
             for path in self.source.rglob("*") if path.is_file()

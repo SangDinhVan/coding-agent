@@ -813,10 +813,12 @@ metadata created before this migration remains legacy shadow mode.
   visible immediately. The child runs as `0:0` only inside the rootless user
   namespace, mapping to the invoking unprivileged host user. Legacy shadow
   sessions retain image user `65532:65532`.
-- Existing `.git`, `.env*`, credential, Git-ignored, cache, and paths selected
-  by `.agentignore` are replaced inside live children by protected empty
-  read-only masks. Host home, Docker socket, inherited host secrets, and paths
-  outside the selected workspace are not mounted.
+- Existing `.git`, `.env*`, credential paths, known cache/build directories,
+  and paths selected by `.agentignore` are replaced inside live children by
+  protected empty read-only masks. Ordinary `.gitignore` entries remain writable;
+  Git versioning policy is not treated as an access-control boundary. Host home,
+  Docker socket, inherited host secrets, and paths outside the selected workspace
+  are not mounted.
 - Runtime inspect/probe and resume reconciliation verify the exact mode, bind
   source, mask source/destination/read-only state, user, image, labels,
   privileges, network, rootfs, and resource limits. Mismatch fails closed.
@@ -836,9 +838,10 @@ metadata created before this migration remains legacy shadow mode.
   session creation.
 - Live mode deliberately has no final whole-set approval gate or automatic file
   rollback. Successful tool mutations are already in the repository.
-- Mask discovery protects denylisted/ignored entries that exist when the session
-  starts; it cannot pre-mount every future filename that arbitrary shell may
-  create later.
+- Mask discovery protects denylisted, `.agentignore`, and known cache/build
+  entries that exist when the session starts; it cannot pre-mount every future
+  filename that arbitrary shell may create later. Mask sets persist with a
+  session, so policy changes apply to newly created sessions.
 - `sandbox_violation` is represented as `detected | not_detected | unknown`.
   Descriptor helpers can prove certain traversal violations, while arbitrary
   shell execution often yields only an observation rather than syscall intent.

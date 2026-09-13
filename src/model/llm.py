@@ -8,7 +8,7 @@ def get_context_window(model: str = None) -> int:
 
 
 def complete(messages, tools=None, model: str = None,base_url: str = None,api_key: str = None, stream: bool = False, **kwargs):
-
+    kwargs.setdefault("timeout", 120)
     return litellm.completion(
         model=model or MODEL,
         messages=messages,
