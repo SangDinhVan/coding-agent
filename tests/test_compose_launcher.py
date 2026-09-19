@@ -69,6 +69,8 @@ class ComposeLauncherTests(unittest.TestCase):
         control_dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
         self.assertIn("apt-get install", control_dockerfile)
         self.assertIn("git", control_dockerfile)
+        self.assertIn('p.write_bytes(p.read_bytes().replace(b"\\r\\n", b"\\n"))', control_dockerfile)
+        self.assertIn("docker-entrypoint.sh text eol=lf", (ROOT / ".gitattributes").read_text(encoding="utf-8"))
 
         compose = (ROOT / "compose.yaml").read_text(encoding="utf-8")
         self.assertIn("env_file:", compose)

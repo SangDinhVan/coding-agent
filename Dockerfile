@@ -16,6 +16,7 @@ COPY pyproject.toml requirements.txt ./
 COPY src ./src
 RUN python -m pip install --no-cache-dir .
 COPY docker-entrypoint.sh /usr/local/bin/coding-agent-entrypoint
-RUN chmod 0555 /usr/local/bin/coding-agent-entrypoint
+RUN python -c 'from pathlib import Path; p = Path("/usr/local/bin/coding-agent-entrypoint"); p.write_bytes(p.read_bytes().replace(b"\r\n", b"\n"))' \
+    && chmod 0555 /usr/local/bin/coding-agent-entrypoint
 
 ENTRYPOINT ["/usr/local/bin/coding-agent-entrypoint"]
