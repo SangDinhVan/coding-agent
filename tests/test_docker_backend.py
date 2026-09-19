@@ -166,6 +166,18 @@ class DockerBackendTests(unittest.TestCase):
         self.assertIn("--read-only", argv)
         self.assertIn("--cap-drop", argv)
 
+    def test_control_container_missing_mount_fails_before_docker_create(self):
+        with tempfile.TemporaryDirectory() as workspace:
+            control_id = "b" * 12
+            runner = FakeRunner([result(json.dumps([{
+                "Id": "b" * 64,
+                "Mounts": [{"Source": "/daemon/other", "Destination": "/other"}],
+            }]))])
+            backend = DockerBackend(self.image, runner=runner, control_container_id=control_id)
+            with self.assertRaisesRegex(DockerPreflightError, "No daemon-visible bind source"):
+                backend.create("session-1", "workspace-hash", Path(workspace), ResourceLimits())
+            self.assertEqual(len(runner.calls), 1)
+
     def test_live_create_mounts_host_workspace_as_rootless_root_with_read_only_masks(self):
         runner = FakeRunner([result("container-id\n")])
         with tempfile.TemporaryDirectory() as workspace, tempfile.TemporaryDirectory() as state:

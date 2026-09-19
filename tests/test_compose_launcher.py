@@ -35,7 +35,7 @@ class ComposeLauncherTests(unittest.TestCase):
                 "IMAGE_ID": image_id,
                 "WORKSPACE": str(workspace),
                 "STATE_ROOT": str(state),
-                "HOSTNAME": "control-container-id",
+                "CONTROL_CONTAINER_ID": "control-container-id",
             }
             result = subprocess.run(
                 [str(ENTRYPOINT), "resume", "--last"], env=env,

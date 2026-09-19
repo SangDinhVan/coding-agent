@@ -44,14 +44,14 @@ def _run(argv, *, input=None, timeout=None):
     return subprocess.run(argv, input=input, capture_output=True, text=True, timeout=timeout)
 
 
-def _translated_source(path: Path, mounts: tuple[tuple[Path, Path], ...]) -> Path:
+def _translated_source(path: Path, mounts: tuple[tuple[Path, Path], ...]) -> Path | None:
     for destination, source in sorted(mounts, key=lambda item: len(item[0].parts), reverse=True):
         try:
             relative = path.relative_to(destination)
         except ValueError:
             continue
         return source / relative
-    return path
+    return None
 
 
 class DockerBackend:
@@ -127,7 +127,15 @@ class DockerBackend:
 
     def daemon_source(self, path: Path) -> Path:
         self._load_control_mounts()
-        return _translated_source(Path(path).resolve(strict=True), self.control_mounts)
+        resolved = Path(path).resolve(strict=True)
+        translated = _translated_source(resolved, self.control_mounts)
+        if translated is not None:
+            return translated
+        if self.control_container_id:
+            raise DockerPreflightError(
+                f"No daemon-visible bind source for {resolved}; control container mounts do not cover this path"
+            )
+        return resolved
 
     def create(
         self,
