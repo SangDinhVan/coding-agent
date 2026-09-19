@@ -16,7 +16,8 @@ class FakeBackend:
         self.stops = 0
         self.destroyed = False
 
-    def preflight(self, limits): return {}
+    def preflight(self, limits):
+        return {"daemon_id": "daemon", "isolation_level": "VM_ISOLATED"}
     def create(self, session_id, identity, workspace, limits, *, mode=WorkspaceMode.SHADOW, masks=()):
         self.container_id = "cid-" + session_id
         self.identity = identity
@@ -91,6 +92,7 @@ class SandboxSessionTests(unittest.TestCase):
         self.assertEqual(session.status, SandboxStatus.RUNNING)
         metadata = json.loads(self.paths.metadata.read_text())
         self.assertEqual(metadata["container_id"], "cid-s1")
+        self.assertEqual(metadata["isolation_level"], "VM_ISOLATED")
 
     def test_invalid_transition_fails_closed(self):
         session = self.session()

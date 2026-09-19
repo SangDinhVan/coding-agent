@@ -35,6 +35,7 @@ class ComposeLauncherTests(unittest.TestCase):
                 "IMAGE_ID": image_id,
                 "WORKSPACE": str(workspace),
                 "STATE_ROOT": str(state),
+                "HOSTNAME": "control-container-id",
             }
             result = subprocess.run(
                 [str(ENTRYPOINT), "resume", "--last"], env=env,
@@ -43,7 +44,7 @@ class ComposeLauncherTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(log.read_text(encoding="utf-8").splitlines(), [
                 f"docker:build --quiet --tag sang-coding-agent-sandbox:local {workspace}/sandbox-image",
-                f"agent:--workspace {workspace} --state-root {state} --image {image_id} resume --last",
+                f"agent:--workspace {workspace} --state-root {state} --image {image_id} --control-container-id control-container-id resume --last",
             ])
 
     def test_launcher_rejects_non_immutable_build_result(self):
@@ -72,6 +73,11 @@ class ComposeLauncherTests(unittest.TestCase):
         compose = (ROOT / "compose.yaml").read_text(encoding="utf-8")
         self.assertIn("env_file:", compose)
         self.assertIn("- .env", compose)
+        self.assertIn("${DOCKER_SOCKET:-${XDG_RUNTIME_DIR:-/var/run}/docker.sock}:/var/run/docker.sock", compose)
+        self.assertIn("working_dir: /workspace", compose)
+        self.assertIn("- .:/workspace", compose)
+        self.assertIn("WORKSPACE: /workspace", compose)
+        self.assertIn("STATE_ROOT: /state", compose)
 
         sandbox_dockerfile = (ROOT / "sandbox-image" / "Dockerfile").read_text(encoding="utf-8")
         self.assertNotIn("COPY --chmod", sandbox_dockerfile)

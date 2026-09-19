@@ -21,9 +21,9 @@ neither the rootless Docker socket nor host paths outside the workspace.
 
 ## Requirements
 
-- Linux host
-- Docker Engine in rootless mode
-- cgroups v2
+- Linux with rootless Docker Engine, or Docker Desktop on Windows/macOS using
+  Linux containers
+- cgroups v2 in the daemon VM/host
 - Local immutable image reference (`sha256:<64-hex>` image ID or
   `repository@sha256:<64-hex>` registry digest)
 - At least 5 GiB free by default in the state filesystem
@@ -32,11 +32,13 @@ Verify the daemon:
 
 ```bash
 docker context show
-docker info --format '{{json .SecurityOptions}} cgroup={{.CgroupVersion}} root={{.DockerRootDir}}'
+docker info --format 'os={{.OperatingSystem}} version={{.ServerVersion}} security={{json .SecurityOptions}} cgroup={{.CgroupVersion}}'
 ```
 
-Expected evidence includes `name=rootless` and `cgroup=2`. Do not use a rootful
-or host-execution fallback.
+Preflight classifies the daemon as `ROOTLESS`, `VM_ISOLATED`, or
+`ROOTFUL_BARE`. `ROOTLESS` and Docker Desktop `VM_ISOLATED` are accepted;
+`ROOTFUL_BARE` fails closed. Docker Desktop's Linux VM boundary is acceptable
+for this project, but is **not equivalent to a genuinely rootless daemon**.
 
 ## Run with one Docker command
 
@@ -49,8 +51,10 @@ docker compose run --build --rm coding-agent
 The Compose launcher builds the trusted control-plane image, builds the sandbox
 image from the restricted `sandbox-image/` context, obtains its immutable local
 `sha256:<64-hex>` image ID, and passes that exact ID to the agent. It mounts the
-rootless Docker socket only into the trusted control plane; sandbox children
-never receive the socket.
+host daemon socket only into the trusted control plane; sandbox children never
+receive the socket. The control plane inspects its own Compose mounts and
+translates `/workspace` and `/state` to daemon-visible sources before creating a
+child, so host path syntax does not leak into Linux-container code.
 
 Resume the latest session with:
 
@@ -61,8 +65,16 @@ docker compose run --build --rm coding-agent resume --last
 A session created by an older version remains legacy shadow mode after resume;
 it is never migrated or copied into the repository automatically.
 
-`XDG_RUNTIME_DIR` must point to the current user's rootless Docker runtime (for
-example `/run/user/1000`), as it normally does in a rootless Docker shell.
+Docker Desktop on Windows/macOS uses the default `/var/run/docker.sock` source
+inside its Linux VM. On Linux, Compose uses `$XDG_RUNTIME_DIR/docker.sock` when
+`XDG_RUNTIME_DIR` is set. To select a different socket explicitly:
+
+```bash
+DOCKER_SOCKET="$XDG_RUNTIME_DIR/docker.sock" docker compose run --build --rm coding-agent
+```
+
+Do not mount Windows `\\.\pipe\docker_engine` into the Linux control-plane
+container; the Linux Docker CLI communicates through the VM's Unix socket.
 
 ## Build and pin the sandbox image manually
 
@@ -112,7 +124,8 @@ model or tool execution. Legacy metadata may omit only the mode label.
 
 ## Runtime security contract
 
-- Rootless Docker and cgroups v2 are mandatory.
+- Daemon isolation must be `ROOTLESS` or Docker Desktop `VM_ISOLATED`;
+  `ROOTFUL_BARE` fails closed. cgroups v2 remains mandatory.
 - Immutable image digest and `--pull never` prevent mutable-image drift.
 - `--network none`, read-only rootfs, all capabilities dropped, and
   `no-new-privileges` remain enabled.
@@ -134,12 +147,13 @@ model or tool execution. Legacy metadata may omit only the mode label.
 
 The sandbox image still declares non-root user `65532:65532`, which legacy
 shadow sessions use. Host repositories are normally owned by the invoking host
-user and cannot be written by that subuid. A live child therefore runs as
-`0:0` **inside the rootless Docker user namespace**; that identity maps to the
-invoking unprivileged host user, not host root. Capability drop,
-no-new-privileges, rootless daemon enforcement, read-only rootfs, and network
-isolation still apply. Files created in the repository retain host-user
-ownership.
+user and cannot be written by that identity. A live child therefore runs as
+`0:0` inside the daemon boundary. With rootless Docker this maps to the invoking
+unprivileged host user; with Docker Desktop it is root only inside the Linux VM,
+not the Windows/macOS host. Capability drop, no-new-privileges, read-only
+rootfs, and network isolation still apply. Docker Desktop `VM_ISOLATED` is a
+weaker assurance than true rootless operation and is accepted only for this
+project's scope.
 
 ## Resource options
 
@@ -272,7 +286,9 @@ change set.
 
 ## Known V1 limitations
 
-- Docker shares the host kernel; this is not VM-strength isolation.
+- On rootless Linux, Docker shares the host kernel; this is not VM-strength
+  isolation. On Docker Desktop, the daemon and children run in a Linux VM, but
+  `VM_ISOLATED` is still not equivalent to rootless Docker.
 - Live arbitrary shell can modify or delete any unmasked path in the repository.
   There is no whole-set approval or automatic live rollback.
 - Mask discovery covers sensitive/ignored entries that exist when the session is

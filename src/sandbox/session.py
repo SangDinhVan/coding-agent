@@ -54,6 +54,7 @@ class SandboxSession:
         self.free_space_floor_bytes = free_space_floor_bytes
         self.status = SandboxStatus.STOPPED if paths.metadata.exists() else None
         self.baseline_bytes = 0
+        self.isolation_level = None
         self._watchdog_stop = threading.Event()
         self._watchdog_thread = None
         if paths.metadata.exists():
@@ -62,6 +63,7 @@ class SandboxSession:
             self.legacy_workspace_metadata = "workspace_mode" not in data
             self.mode = WorkspaceMode(data.get("workspace_mode", WorkspaceMode.SHADOW.value))
             self.baseline_bytes = int(data.get("baseline_bytes", 0))
+            self.isolation_level = data.get("isolation_level")
             self.masks = tuple(
                 (
                     ManifestEntry(path=SandboxPath(item["path"]), kind=item["kind"], reason=item.get("reason")),
@@ -79,6 +81,7 @@ class SandboxSession:
             "container_id": self.backend.container_id, "workspace_identity": self.paths.workspace_identity,
             "image_digest": getattr(self.backend, "image", "test"), "limits": asdict(self.limits),
             "baseline_bytes": self.baseline_bytes, "workspace_mode": self.mode.value,
+            "isolation_level": self.isolation_level,
             "masks": [
                 {"path": str(entry.path), "kind": entry.kind, "reason": entry.reason}
                 for entry, _ in self.masks
@@ -91,6 +94,10 @@ class SandboxSession:
         os.replace(temporary, self.paths.metadata)
         self.paths.heartbeat.touch(mode=0o600)
 
+    def _daemon_source(self, path: Path) -> Path:
+        mapper = getattr(self.backend, "daemon_source", None)
+        return mapper(path) if mapper else Path(path).resolve(strict=True)
+
     @property
     def mount_source(self) -> Path:
         return self.source_workspace if self.mode == WorkspaceMode.LIVE else self.paths.workspace
@@ -98,7 +105,8 @@ class SandboxSession:
     def create(self):
         if self.status is not None:
             raise SessionError("session already exists")
-        self.backend.preflight(self.limits)
+        evidence = self.backend.preflight(self.limits)
+        self.isolation_level = evidence.get("isolation_level")
         if self.mode == WorkspaceMode.LIVE:
             manifest = prepare_live_workspace(
                 self.source_workspace, self.paths,
@@ -193,7 +201,7 @@ class SandboxSession:
         expected = {
             "image_digest": metadata.get("image_digest"),
             "user": "0:0" if self.mode == WorkspaceMode.LIVE else "65532:65532",
-            "mount_source": str(self.mount_source.resolve()),
+            "mount_source": str(self._daemon_source(self.mount_source)),
             "mount_rw": True,
             "network_mode": "none",
             "read_only_rootfs": True,
@@ -206,7 +214,7 @@ class SandboxSession:
         mismatch = mismatch or any(inspected.get("labels", {}).get(key) != value for key, value in expected_labels.items())
         inspected_mounts = {item.get("Destination"): item for item in inspected.get("mounts", [])}
         mismatch = mismatch or any(
-            inspected_mounts.get(f"/workspace/{entry.path}", {}).get("Source") != str(source)
+            inspected_mounts.get(f"/workspace/{entry.path}", {}).get("Source") != str(self._daemon_source(source))
             or inspected_mounts.get(f"/workspace/{entry.path}", {}).get("RW") is not False
             for entry, source in self.masks
         )

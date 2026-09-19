@@ -804,15 +804,21 @@ metadata created before this migration remains legacy shadow mode.
 
 ### Enforced now
 
-- All model-controlled shell and filesystem tools are bound to one rootless
-  Docker session and fail closed when no running session exists.
+- All model-controlled shell and filesystem tools are bound to one Docker child
+  session and fail closed when no running session exists. Daemon preflight
+  accepts Linux rootless (`ROOTLESS`) and Docker Desktop on Windows/macOS
+  (`VM_ISOLATED`), while direct rootful daemons (`ROOTFUL_BARE`) are rejected.
+  `VM_ISOLATED` relies on Docker Desktop's Linux VM and is not equivalent to
+  genuine rootless Docker; that weaker boundary is accepted for this project's
+  scope.
 - The container uses an immutable image, `network=none`, a read-only root
   filesystem, all capabilities dropped, no-new-privileges, cgroups v2
   CPU/memory/PID limits, bounded `/tmp`, and one exact writable workspace bind.
+  These hardening arguments are identical for every isolation classification.
 - New live sessions mount the host repository RW, so successful tool effects are
-  visible immediately. The child runs as `0:0` only inside the rootless user
-  namespace, mapping to the invoking unprivileged host user. Legacy shadow
-  sessions retain image user `65532:65532`.
+  visible immediately. The child runs as `0:0` only inside the daemon boundary:
+  a rootless user namespace on Linux or Docker Desktop's Linux VM on
+  Windows/macOS. Legacy shadow sessions retain image user `65532:65532`.
 - Existing `.git`, `.env*`, credential paths, known cache/build directories,
   and paths selected by `.agentignore` are replaced inside live children by
   protected empty read-only masks. Ordinary `.gitignore` entries remain writable;

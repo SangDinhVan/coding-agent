@@ -1,11 +1,35 @@
 from __future__ import annotations
 
 import json
+import logging
 import subprocess
+from enum import Enum
 from pathlib import Path
 from typing import Callable
 
 from sandbox.models import ExecRequest, ExecutionStatus, ManifestEntry, ResourceLimits, SandboxResult, ViolationStatus, WorkspaceMode
+
+
+logger = logging.getLogger(__name__)
+
+
+class DockerIsolationLevel(str, Enum):
+    ROOTLESS = "ROOTLESS"
+    VM_ISOLATED = "VM_ISOLATED"
+    ROOTFUL_BARE = "ROOTFUL_BARE"
+
+
+def classify_isolation_level(info: dict) -> DockerIsolationLevel:
+    security_options = info.get("SecurityOptions") or []
+    if any("rootless" in str(option).lower() for option in security_options):
+        return DockerIsolationLevel.ROOTLESS
+    desktop_evidence = " ".join((
+        str(info.get("OperatingSystem", "")),
+        str(info.get("ServerVersion", "")),
+    )).lower()
+    if "docker desktop" in desktop_evidence:
+        return DockerIsolationLevel.VM_ISOLATED
+    return DockerIsolationLevel.ROOTFUL_BARE
 
 
 class DockerPreflightError(RuntimeError):
@@ -20,8 +44,18 @@ def _run(argv, *, input=None, timeout=None):
     return subprocess.run(argv, input=input, capture_output=True, text=True, timeout=timeout)
 
 
+def _translated_source(path: Path, mounts: tuple[tuple[Path, Path], ...]) -> Path:
+    for destination, source in sorted(mounts, key=lambda item: len(item[0].parts), reverse=True):
+        try:
+            relative = path.relative_to(destination)
+        except ValueError:
+            continue
+        return source / relative
+    return path
+
+
 class DockerBackend:
-    def __init__(self, image: str, *, runner: Callable = _run):
+    def __init__(self, image: str, *, runner: Callable = _run, control_container_id: str = ""):
         digest = image.rsplit("@sha256:", 1)[1] if "@sha256:" in image else image.removeprefix("sha256:")
         is_local_id = image.startswith("sha256:") and image.count(":") == 1
         if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest) or not ("@sha256:" in image or is_local_id):
@@ -31,9 +65,24 @@ class DockerBackend:
         self.container_id = None
         self.session_id = ""
         self.daemon_id = ""
+        self.isolation_level = None
+        self.control_container_id = control_container_id
+        self.control_mounts: tuple[tuple[Path, Path], ...] = ()
         self.mode = WorkspaceMode.SHADOW
         self.mount_source = None
         self.masks: tuple[tuple[ManifestEntry, Path], ...] = ()
+
+    def _load_control_mounts(self):
+        if not self.control_container_id or self.control_mounts:
+            return
+        control = json.loads(self._checked(["docker", "inspect", self.control_container_id]))
+        if len(control) != 1 or not str(control[0].get("Id", "")).startswith(self.control_container_id):
+            raise DockerPreflightError("control container identity mismatch")
+        self.control_mounts = tuple(
+            (Path(item["Destination"]), Path(item["Source"]))
+            for item in control[0].get("Mounts", [])
+            if item.get("Destination") and item.get("Source")
+        )
 
     def _checked(self, argv, *, input=None, timeout=30):
         try:
@@ -46,11 +95,17 @@ class DockerBackend:
 
     def preflight(self, limits: ResourceLimits):
         info = json.loads(self._checked(["docker", "info", "--format", "{{json .}}"] ))
-        options = info.get("SecurityOptions", [])
-        if not any("rootless" in item for item in options):
-            raise DockerPreflightError("Docker daemon is not rootless")
+        self.isolation_level = classify_isolation_level(info)
+        if self.isolation_level == DockerIsolationLevel.ROOTFUL_BARE:
+            raise DockerPreflightError("Docker daemon isolation level ROOTFUL_BARE is not allowed")
+        if self.isolation_level == DockerIsolationLevel.VM_ISOLATED:
+            logger.warning(
+                "Docker Desktop VM isolation is accepted for this project, "
+                "but it is not equivalent to rootless Docker"
+            )
         if str(info.get("CgroupVersion")) != "2":
             raise DockerPreflightError("cgroups v2 is required")
+        self._load_control_mounts()
         inspected = json.loads(self._checked(["docker", "image", "inspect", self.image]))
         matches_image = len(inspected) == 1 and (
             inspected[0].get("Id") == self.image
@@ -63,7 +118,16 @@ class DockerBackend:
         if not user or user.split(":", 1)[0] in {"0", "root"}:
             raise DockerPreflightError("sandbox image must configure a non-root user")
         self.daemon_id = str(info.get("ID", ""))
-        return {"daemon_id": self.daemon_id, "image": self.image, "limits": limits}
+        return {
+            "daemon_id": self.daemon_id,
+            "isolation_level": self.isolation_level.value,
+            "image": self.image,
+            "limits": limits,
+        }
+
+    def daemon_source(self, path: Path) -> Path:
+        self._load_control_mounts()
+        return _translated_source(Path(path).resolve(strict=True), self.control_mounts)
 
     def create(
         self,
@@ -76,8 +140,9 @@ class DockerBackend:
         masks: tuple[tuple[ManifestEntry, Path], ...] = (),
     ) -> str:
         workspace = workspace.resolve(strict=True)
+        daemon_workspace = self.daemon_source(workspace)
         mode = WorkspaceMode(mode)
-        if "," in str(workspace):
+        if "," in str(daemon_workspace):
             raise DockerPreflightError("Docker bind mount paths cannot contain a comma")
         runtime_user = "0:0" if mode == WorkspaceMode.LIVE else "65532:65532"
         argv = [
@@ -92,15 +157,16 @@ class DockerBackend:
             "--memory", str(limits.memory_bytes), "--memory-swap", str(limits.memory_bytes),
             "--cpus", str(limits.cpus),
             "--tmpfs", f"/tmp:rw,nosuid,nodev,noexec,size={limits.tmpfs_bytes}",
-            "--mount", f"type=bind,src={workspace},dst=/workspace",
+            "--mount", f"type=bind,src={daemon_workspace},dst=/workspace",
         ]
         normalized_masks = []
         for entry, source in masks:
             source = Path(source).resolve(strict=True)
+            daemon_source = self.daemon_source(source)
             target = f"/workspace/{entry.path}"
-            if "," in str(source) or "," in target:
+            if "," in str(daemon_source) or "," in target:
                 raise DockerPreflightError("Docker bind mount paths cannot contain a comma")
-            argv.extend(("--mount", f"type=bind,src={source},dst={target},readonly"))
+            argv.extend(("--mount", f"type=bind,src={daemon_source},dst={target},readonly"))
             normalized_masks.append((entry, source))
         argv.extend(("--workdir", "/workspace", "--user", runtime_user, self.image))
         self.container_id = self._checked(argv).strip()
@@ -163,7 +229,7 @@ class DockerBackend:
             "running": True,
             "image_digest": self.image,
             "user": "0:0" if self.mode == WorkspaceMode.LIVE else "65532:65532",
-            "mount_source": str(Path(workspace).resolve(strict=True)),
+            "mount_source": str(self.daemon_source(Path(workspace))),
             "mount_rw": True,
             "network_mode": "none",
             "read_only_rootfs": True,
@@ -180,7 +246,7 @@ class DockerBackend:
         }
         for entry, source in self.masks:
             item = mount_evidence.get(f"/workspace/{entry.path}", {})
-            if item.get("Source") != str(source) or item.get("RW") is not False:
+            if item.get("Source") != str(self.daemon_source(source)) or item.get("RW") is not False:
                 raise DockerPreflightError("sandbox runtime mask contract mismatch")
         if set(evidence.get("cap_drop", [])) != {"ALL"} or "no-new-privileges:true" not in evidence.get("security_opt", []):
             raise DockerPreflightError("sandbox runtime privilege contract mismatch")

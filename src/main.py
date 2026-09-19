@@ -24,6 +24,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--workspace", default=".", help="Host workspace to snapshot")
     parser.add_argument("--state-root", default=str(ControlPaths.default_root()), help="Host-only sandbox state root")
     parser.add_argument("--image", required=True, help="Immutable sandbox image: sha256 image ID or repository@sha256 digest")
+    parser.add_argument("--control-container-id", default="", help=argparse.SUPPRESS)
     parser.add_argument("--cpus", type=float, default=2.0)
     parser.add_argument("--memory-mib", type=int, default=2048)
     parser.add_argument("--pids", type=int, default=256)
@@ -109,10 +110,11 @@ def _default_agent_factory(
     state_root: Path,
     image: str,
     limits: ResourceLimits,
+    control_container_id: str = "",
 ):
     source = workspace.expanduser().resolve(strict=True)
     paths = ControlPaths.create(state_root, events_path.stem, source)
-    backend = DockerBackend(image)
+    backend = DockerBackend(image, control_container_id=control_container_id)
     if paths.metadata.exists():
         metadata = json.loads(paths.metadata.read_text(encoding="utf-8"))
         backend.container_id = metadata.get("container_id")
@@ -246,7 +248,7 @@ def main(argv: list[str] | None = None) -> int:
         events_path = select_chat_path(args, chats_dir=chats_dir)
         run_repl(
             events_path,
-            factory_args=(Path(args.workspace), state_root, args.image, limits),
+            factory_args=(Path(args.workspace), state_root, args.image, limits, args.control_container_id),
         )
     except (ValueError, EOFError, KeyboardInterrupt, OSError, RuntimeError) as error:
         print(f"Sandbox setup failed: {error}")

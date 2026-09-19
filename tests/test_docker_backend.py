@@ -4,7 +4,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from sandbox.docker import DockerBackend, DockerPreflightError, DockerTransportError
+from sandbox.docker import (
+    DockerBackend,
+    DockerIsolationLevel,
+    DockerPreflightError,
+    DockerTransportError,
+    classify_isolation_level,
+)
 from sandbox.models import ExecRequest, ManifestEntry, ResourceLimits, SandboxPath, WorkspaceMode
 
 
@@ -30,11 +36,50 @@ def result(stdout="", returncode=0, stderr=""):
 class DockerBackendTests(unittest.TestCase):
     image = "coding-agent-python@sha256:" + "a" * 64
 
-    def test_preflight_rejects_rootful_daemon(self):
-        runner = FakeRunner([result(json.dumps({"SecurityOptions": ["name=seccomp"], "CgroupVersion": "2"}))])
+    def preflight_responses(self, info):
+        return [
+            result(json.dumps(info | {"CgroupVersion": "2", "ID": "daemon"})),
+            result(json.dumps([{"RepoDigests": [self.image], "Config": {"User": "65532:65532"}}])),
+        ]
+
+    def test_classifies_all_daemon_isolation_levels(self):
+        cases = (
+            ({"SecurityOptions": ["name=rootless"], "OperatingSystem": "CachyOS", "ServerVersion": "29.0"}, DockerIsolationLevel.ROOTLESS),
+            ({"SecurityOptions": ["name=seccomp"], "OperatingSystem": "Docker Desktop", "ServerVersion": "29.7.2"}, DockerIsolationLevel.VM_ISOLATED),
+            ({"SecurityOptions": ["name=seccomp"], "OperatingSystem": "Ubuntu", "ServerVersion": "Docker Desktop 4.50"}, DockerIsolationLevel.VM_ISOLATED),
+            ({"SecurityOptions": ["name=seccomp"], "OperatingSystem": "Ubuntu", "ServerVersion": "29.0"}, DockerIsolationLevel.ROOTFUL_BARE),
+        )
+        for info, expected in cases:
+            with self.subTest(expected=expected):
+                self.assertEqual(classify_isolation_level(info), expected)
+
+    def test_preflight_rejects_rootful_bare_daemon(self):
+        runner = FakeRunner([result(json.dumps({
+            "SecurityOptions": ["name=seccomp"], "OperatingSystem": "Ubuntu",
+            "ServerVersion": "29.0", "CgroupVersion": "2",
+        }))])
         backend = DockerBackend(self.image, runner=runner)
-        with self.assertRaisesRegex(DockerPreflightError, "rootless"):
+        with self.assertRaisesRegex(DockerPreflightError, "ROOTFUL_BARE"):
             backend.preflight(ResourceLimits())
+
+    def test_preflight_accepts_rootless_and_vm_isolated_daemons(self):
+        cases = (
+            ({"SecurityOptions": ["name=rootless"], "OperatingSystem": "CachyOS", "ServerVersion": "29.0"}, DockerIsolationLevel.ROOTLESS),
+            ({"SecurityOptions": ["name=seccomp"], "OperatingSystem": "Docker Desktop", "ServerVersion": "29.7.2"}, DockerIsolationLevel.VM_ISOLATED),
+        )
+        for info, expected in cases:
+            with self.subTest(expected=expected):
+                runner = FakeRunner(self.preflight_responses(info))
+                backend = DockerBackend(self.image, runner=runner)
+                if expected == DockerIsolationLevel.VM_ISOLATED:
+                    with self.assertLogs("sandbox.docker", level="WARNING") as logs:
+                        evidence = backend.preflight(ResourceLimits())
+                    self.assertIn("not equivalent to rootless", " ".join(logs.output))
+                else:
+                    evidence = backend.preflight(ResourceLimits())
+                self.assertEqual(evidence["isolation_level"], expected.value)
+                self.assertEqual(backend.isolation_level, expected)
+
 
     def test_accepts_exact_local_image_id_and_rejects_malformed_id(self):
         image_id = "sha256:" + "b" * 64
@@ -72,6 +117,54 @@ class DockerBackendTests(unittest.TestCase):
         self.assertNotIn(",rw", mount)
         self.assertNotIn("--privileged", argv)
         self.assertIsInstance(argv, list)
+
+    def test_create_argv_is_identical_for_every_isolation_level(self):
+        calls = []
+        with tempfile.TemporaryDirectory() as workspace:
+            for level in DockerIsolationLevel:
+                runner = FakeRunner([result("container-id\n")])
+                backend = DockerBackend(self.image, runner=runner)
+                backend.isolation_level = level
+                backend.create("session-1", "workspace-hash", Path(workspace), ResourceLimits())
+                calls.append(runner.calls[0][0])
+        self.assertEqual(calls[0], calls[1])
+        self.assertEqual(calls[1], calls[2])
+
+    def test_docker_outside_of_docker_uses_daemon_visible_mount_sources(self):
+        limits = ResourceLimits()
+        with tempfile.TemporaryDirectory() as workspace, tempfile.TemporaryDirectory() as state:
+            mask = Path(state) / "mask-file"
+            mask.touch()
+            control_id = "b" * 12
+            control = [{
+                "Id": "b" * 64,
+                "Mounts": [
+                    {"Source": "/daemon/workspace", "Destination": workspace},
+                    {"Source": "/daemon/state", "Destination": state},
+                ],
+            }]
+            runner = FakeRunner([
+                result(json.dumps({
+                    "SecurityOptions": ["name=rootless"], "CgroupVersion": "2", "ID": "daemon",
+                })),
+                result(json.dumps(control)),
+                result(json.dumps([{"RepoDigests": [self.image], "Config": {"User": "65532:65532"}}])),
+                result("container-id\n"),
+            ])
+            backend = DockerBackend(self.image, runner=runner, control_container_id=control_id)
+            backend.preflight(limits)
+            backend.create(
+                "session-1", "workspace-hash", Path(workspace), limits,
+                mode=WorkspaceMode.LIVE,
+                masks=((ManifestEntry(SandboxPath(".env"), "file"), mask),),
+            )
+        argv = runner.calls[-1][0]
+        mounts = [argv[index + 1] for index, item in enumerate(argv) if item == "--mount"]
+        self.assertEqual(mounts[0], "type=bind,src=/daemon/workspace,dst=/workspace")
+        self.assertEqual(mounts[1], "type=bind,src=/daemon/state/mask-file,dst=/workspace/.env,readonly")
+        self.assertIn("--network", argv)
+        self.assertIn("--read-only", argv)
+        self.assertIn("--cap-drop", argv)
 
     def test_live_create_mounts_host_workspace_as_rootless_root_with_read_only_masks(self):
         runner = FakeRunner([result("container-id\n")])
