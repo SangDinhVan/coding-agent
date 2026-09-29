@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from core.paths import ControlPaths
+from core.paths import ControlPaths, checkpoint_path, project_memory_path, workspace_identity
 from sandbox.models import ResourceLimits, SandboxPath, SandboxStatus
 
 
@@ -50,6 +50,36 @@ class ControlPathsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as workspace:
             with self.assertRaises(ValueError):
                 ControlPaths.create(root, "../escape", workspace)
+
+    def test_workspace_identity_matches_control_paths(self):
+        with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as workspace:
+            identity = workspace_identity(workspace)
+            self.assertEqual(
+                identity,
+                ControlPaths.create(root, "session-1", workspace).workspace_identity,
+            )
+
+    def test_project_and_checkpoint_paths_use_exact_scopes(self):
+        with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as workspace:
+            identity = workspace_identity(workspace)
+            self.assertEqual(
+                project_memory_path(root, identity),
+                Path(root) / "projects" / identity / "PROJECT.md",
+            )
+            self.assertEqual(
+                checkpoint_path(root, "session-1"),
+                Path(root) / "checkpoints" / "session-1.json",
+            )
+
+    def test_distinct_workspaces_have_distinct_memory_paths(self):
+        with (
+            tempfile.TemporaryDirectory() as root,
+            tempfile.TemporaryDirectory() as first,
+            tempfile.TemporaryDirectory() as second,
+        ):
+            first_path = project_memory_path(root, workspace_identity(first))
+            second_path = project_memory_path(root, workspace_identity(second))
+            self.assertNotEqual(first_path, second_path)
 
 
 if __name__ == "__main__":

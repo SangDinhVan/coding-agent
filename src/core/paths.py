@@ -9,6 +9,24 @@ from pathlib import Path
 _SESSION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
+def workspace_identity(source_workspace: str | Path) -> str:
+    source = Path(source_workspace).resolve(strict=True)
+    if not source.is_dir():
+        raise ValueError("source workspace must be a directory")
+    identity_material = f"{source}:{source.stat().st_dev}:{source.stat().st_ino}".encode()
+    return hashlib.sha256(identity_material).hexdigest()
+
+
+def project_memory_path(state_root: str | Path, identity: str) -> Path:
+    return Path(state_root).expanduser().resolve() / "projects" / identity / "PROJECT.md"
+
+
+def checkpoint_path(state_root: str | Path, session_id: str) -> Path:
+    if not _SESSION_ID.fullmatch(session_id):
+        raise ValueError("invalid session ID")
+    return Path(state_root).expanduser().resolve() / "checkpoints" / f"{session_id}.json"
+
+
 @dataclass(frozen=True)
 class ControlPaths:
     root: Path
@@ -29,15 +47,14 @@ class ControlPaths:
     @staticmethod
     def default_root() -> Path:
         base = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state"))
-        return base / "coding-agent"
+        return base / "sang-coding-agent"
 
     @classmethod
     def create(cls, root: str | Path, session_id: str, source_workspace: str | Path) -> "ControlPaths":
         if not _SESSION_ID.fullmatch(session_id):
             raise ValueError("invalid session ID")
         source = Path(source_workspace).resolve(strict=True)
-        if not source.is_dir():
-            raise ValueError("source workspace must be a directory")
+        identity = workspace_identity(source)
         root_path = Path(root).expanduser().resolve()
         session_dir = root_path / "sandboxes" / session_id
         for directory in (root_path, root_path / "sandboxes", session_dir):
@@ -54,8 +71,6 @@ class ControlPaths:
         mask_directory.chmod(0o700)
         mask_file.touch(mode=0o600, exist_ok=True)
         mask_file.chmod(0o600)
-        identity_material = f"{source}:{source.stat().st_dev}:{source.stat().st_ino}".encode()
-        identity = hashlib.sha256(identity_material).hexdigest()
         return cls(
             root=root_path,
             session_id=session_id,
