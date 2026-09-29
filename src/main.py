@@ -153,7 +153,7 @@ def run_repl(
 ) -> None:
     agent = agent_factory(events_path, *factory_args)
     mode = "Resumed" if events_path.exists() else "New"
-    print_fn(f"My Coding Agent (LiteLLM) — {mode} chat {events_path.stem[:8]}")
+    print_fn(f"My Coding Agent (OpenAI SDK) — {mode} chat {events_path.stem[:8]}")
     if getattr(agent, "workspace_mode", WorkspaceMode.SHADOW) == WorkspaceMode.LIVE:
         print_fn("Live workspace — changes are written directly; review or undo with Git/IDE.")
     print_fn("Type 'exit' to quit. Gửi ảnh: /img path1,path2 lời nhắn\n")

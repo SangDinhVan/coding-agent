@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gà Ta Farm — Gà tươi ngon giao tận nhà</title>
+<style>
+  :root{
+    --bg:#fffaf3; --card:#fff; --ink:#3b2f2f; --muted:#8a7a6c;
+    --brand:#d9531e; --brand-dark:#b13d10; --accent:#f6a53c;
+    --ok:#2e8b57; --line:#f0e3d3;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Segoe UI',system-ui,Arial,sans-serif;background:var(--bg);color:var(--ink);line-height:1.55}
+  header{position:sticky;top:0;z-index:10;background:#fffef9ee;border-bottom:1px solid var(--line);backdrop-filter:blur(6px)}
+  .nav{max-width:1080px;margin:auto;display:flex;align-items:center;gap:14px;padding:12px 16px}
+  .logo{display:flex;align-items:center;gap:8px;font-weight:700;font-size:1.15rem}
+  .logo .chick{font-size:1.6rem}
+  .nav a{color:var(--ink);text-decoration:none;margin-left:auto}
+  .nav a:not(.cart-btn){margin-left:0;margin-right:14px;opacity:.85}
+  .cart-btn{background:var(--brand);color:#fff;border:none;border-radius:999px;padding:8px 16px;font-size:.95rem;cursor:pointer;position:relative}
+  .cart-btn .badge{position:absolute;top:-7px;right:-4px;background:var(--accent);color:#3b2f2f;font-weight:700;font-size:.75rem;border-radius:999px;padding:2px 7px}
+  .hero{max-width:1080px;margin:auto;padding:48px 16px 32px;display:grid;grid-template-columns:1.2fr .8fr;gap:24px;align-items:center}
+  .hero h1{font-size:2.4rem;line-height:1.2;margin-bottom:12px}
+  .hero h1 em{color:var(--brand);font-style:normal}
+  .hero p{color:var(--muted);margin-bottom:20px;max-width:46ch}
+  .btn{display:inline-block;background:var(--brand);color:#fff;border:none;border-radius:10px;padding:12px 22px;font-size:1rem;cursor:pointer;text-decoration:none}
+  .btn:hover{background:var(--brand-dark)}
+  .hero-emoji{font-size:7rem;text-align:center;filter:drop-shadow(0 8px 12px #0002)}
+  section{max-width:1080px;margin:auto;padding:24px 16px}
+  h2{font-size:1.6rem;margin-bottom:16px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:18px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden;display:flex;flex-direction:column;transition:transform .15s, box-shadow .15s}
+  .card:hover{transform:translateY(-3px);box-shadow:0 8px 18px #0001}
+  .thumb{height:130px;display:flex;align-items:center;justify-content:center;font-size:4rem;background:linear-gradient(135deg,#fff3e0,#ffe0c2)}
+  .card .body{padding:14px;flex:1;display:flex;flex-direction:column;gap:6px}
+  .card h3{font-size:1.05rem}
+  .desc{color:var(--muted);font-size:.9rem;flex:1}
+  .row{display:flex;align-items:center;justify-content:space-between;margin-top:8px}
+  .price{font-weight:700;color:var(--brand);font-size:1.05rem}
+  .add{background:var(--accent);border:none;border-radius:8px;padding:8px 14px;cursor:pointer;font-size:.9rem;font-weight:600}
+  .add:hover{background:var(--brand);color:#fff}
+  .tag{position:absolute;font-size:.72rem;background:var(--ok);color:#fff;border-radius:6px;padding:2px 8px}
+  .thumb{position:relative}
+  #cart-panel{position:fixed;top:0;right:-380px;width:360px;max-width:92vw;height:100vh;background:#fffef9;box-shadow:-6px 0 20px #0002;transition:right .25s;z-index:20;padding:18px;overflow:auto}
+  #cart-panel.open{right:0}
+  #cart-panel h2{margin-bottom:12px}
+  .item{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:10px 0;border-bottom:1px dashed var(--line)}
+  .item .nm{font-size:.95rem;flex:1}
+  .qty{display:flex;align-items:center;gap:6px}
+  .qty button{width:26px;height:26px;border:1px solid var(--line);background:#fff;border-radius:6px;cursor:pointer}
+  .total{display:flex;justify-content:space-between;font-weight:700;padding:14px 0}
+  .cart-panel .btn{width:100%;margin-top:8px}
+  .close-x{float:right;border:none;background:none;font-size:1.3rem;cursor:pointer}
+  form.order{background:#fff;border:1px solid var(--line);border-radius:14px;padding:18px;max-width:560px}
+  form.order label{display:block;font-size:.9rem;margin:10px 0 4px}
+  form.order input,form.order textarea{width:100%;padding:9px;border:1px solid var(--line);border-radius:8px;font-family:inherit}
+  .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;padding:10px 18px;border-radius:999px;opacity:0;transition:opacity .25s;pointer-events:none}
+  .toast.show{opacity:1}
+  footer{border-top:1px solid var(--line);margin-top:24px;padding:24px 16px;text-align:center;color:var(--muted);font-size:.9rem}
+  @media(max-width:760px){.hero{grid-template-columns:1fr;text-align:center}.hero p{margin:auto}.hero .btn{margin:0 auto}}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="nav">
+    <span class="logo"><span class="chick">🐔</span> Gà Ta Farm</span>
+    <a href="#menu">Sản phẩm</a>
+    <a href="#contact">Liên hệ</a>
+    <button class="cart-btn" onclick="toggleCart()">🛒 Giỏ hàng<span class="badge" id="badge">0</span></button>
+  </div>
+</header>
+
+<div class="hero">
+  <div>
+    <h1>Gà thả vườn <em>tươi mỗi sáng</em>, giao tận nhà trong ngày</h1>
+    <p>Gà ta bản địa nuôi 8–12 tháng, không kháng sinh, không chất tăng trọng. Chặt sẵn theo suất, đóng gói giữ lạnh, giao miễn phí nội thành từ 490k.</p>
+    <a class="btn" href="#menu">Xem giá ngay</a>
+  </div>
+  <div class="hero-emoji">🐓</div>
+</div>
+
+<section id="menu">
+  <h2>Menu hôm nay</h2>
+  <div class="grid" id="products"></div>
+</section>
+
+<section id="contact">
+  <h2>Đặt hàng</h2>
+  <form class="order" id="order-form">
+    <label for="name">Họ tên *</label>
+    <input id="name" required placeholder="Nguyễn Văn A">
+    <label for="phone">Số điện thoại *</label>
+    <input id="phone" required type="tel" pattern="[0-9]{8,11}" placeholder="09xx xxx xxx">
+    <label for="addr">Địa chỉ giao</label>
+    <input id="addr" placeholder="Số nhà, đường, quận/thành phố">
+    <label for="note">Ghi chú</label>
+    <textarea id="note" rows="2" placeholder="VD: giữ lại nội tạng, giao sáng 7h…"></textarea>
+    <p style="margin-top:12px"><button class="btn" type="submit">Gửi đơn</button></p>
+    <p id="form-msg" style="margin-top:10px;color:var(--ok);display:none">✅ Đã nhận đơn! Chúng tôi sẽ gọi xác nhận trong 30 phút.</p>
+  </form>
+</section>
+
+<aside id="cart-panel">
+  <button class="close-x" onclick="toggleCart()">✕</button>
+  <h2>Giỏ hàng</h2>
+  <div id="cart-items"><p style="color:var(--muted)">Chưa có sản phẩm nào.</p></div>
+  <div class="total"><span>Tổng cộng</span><span id="cart-total">0đ</span></div>
+  <button class="btn" onclick="orderFromCart()">Đặt hàng</button>
+</aside>
+
+<div class="toast" id="toast"></div>
+
+<footer>Gà Ta Farm — Hotline 0901 234 567 · 12 Nguyễn Trãi, Q.1, TP.HCM · © 2024</footer>
+
+<script>
+const products = [
+  {id:1, name:"Gà ta nguyên con (~1.8kg)", desc:"Gà mái 10–12 tháng, thịt dai, ngọt. Chặt 4 phần hoặc nguyên con.", price:260000, emoji:"🐔", tag:"Bán chạy"},
+  {id:2, name:"Đùi gà ta (cặp ~700g)", desc:"Cốt lết đùi, phù hợp kho, luộc, quay. Đóng hộp 1kg.", price:95000, emoji:"🍗", tag:""},
+  {id:3, name:"Cánh gà ta (~500g)", desc:"Cánh trên, da vàng ươm, chiên giòn hoặc sả ớt đều hợp.", price:55000, emoji:"🪽", tag:""},
+  {id:4, name:"Gà trống thiến (~2kg)", desc:"Thịt săn, nhiều nạc, ideal cho nhúng lẩu và cháo.", price:310000, emoji:"🐓", tag:"Mới"},
+  {id:5, name:"Trứng gà ta (10 trứng)", desc:"Trứng gà thả vườn tự nhiên, vỏ ngà, yolk đậm. Hộp 10 quả.", price:45000, emoji:"🥚", tag:""},
+  {id:6, name:"Gà con (0.5kg) — bán kg", desc:"Gà con 45 ngày, 120.000đ/kg, cân theo thực tế, cân điện tử quay video.", price:120000, emoji:"🐥", tag:"Giá/kg"}
+];
+let cart = {};
+
+const fmt = n => n.toLocaleString("vi-VN") + "đ";
+const grid = document.getElementById("products");
+
+products.forEach(p=>{
+  const card = document.createElement("div");
+  card.className = "card";
+  card.innerHTML = `
+    <div class="thumb">${p.emoji}${p.tag?`<span class="tag" style="top:8px;left:8px">${p.tag}</span>`:""}</div>
+    <div class="body">
+      <h3>${p.name}</h3>
+      <div class="desc">${p.desc}</div>
+      <div class="row">
+        <span class="price">${fmt(p.price)}</span>
+        <button class="add" onclick="addToCart(${p.id})">+ Thêm</button>
+      </div>
+    </div>`;
+  grid.appendChild(card);
+});
+
+function addToCart(id){
+  cart[id] = (cart[id]||0)+1;
+  renderCart();
+  const p = products.find(x=>x.id===id);
+  toast(`Đã thêm: ${p.name}`);
+}
+function changeQty(id,d){
+  cart[id]=(cart[id]||0)+d;
+  if(cart[id]<=0) delete cart[id];
+  renderCart();
+}
+function cartCount(){ return Object.values(cart).reduce((a,b)=>a+b,0); }
+function cartTotal(){ return Object.entries(cart).reduce((s,[id,q])=>s+products.find(p=>p.id==id).price*q,0); }
+
+function renderCart(){
+  const box = document.getElementById("cart-items");
+  document.getElementById("badge").textContent = cartCount();
+  const ids = Object.keys(cart);
+  if(!ids.length){ box.innerHTML = '<p style="color:var(--muted)">Chưa có sản phẩm nào.</p>'; }
+  else box.innerHTML = ids.map(id=>{
+    const p = products.find(x=>x.id==id);
+    return `<div class="item"><span class="nm">${p.emoji} ${p.name}</span>
+      <span class="qty"><button onclick="changeQty(${id},-1)">−</button><span>${cart[id]}</span><button onclick="changeQty(${id},1)">+</button></span></div>`;
+  }).join("");
+  document.getElementById("cart-total").textContent = fmt(cartTotal());
+}
+function toggleCart(){ document.getElementById("cart-panel").classList.toggle("open"); }
+function orderFromCart(){
+  if(!cartCount()){ toast("Giỏ hàng đang trống 🐔"); return; }
+  toast(`Đặt ${cartCount()} món — tổng ${fmt(cartTotal())}. Gọi 0901 234 567 để xác nhận!`);
+  cart = {}; renderCart(); toggleCart();
+}
+function toast(msg){
+  const t = document.getElementById("toast");
+  t.textContent = msg; t.classList.add("show");
+  clearTimeout(t._h); t._h = setTimeout(()=>t.classList.remove("show"), 2400);
+}
+document.getElementById("order-form").addEventListener("submit", e=>{
+  e.preventDefault();
+  document.getElementById("form-msg").style.display="block";
+  e.target.reset();
+  toast("Cảm ơn! Đơn đã được ghi nhận.");
+});
+</script>
+</body>
+</html>

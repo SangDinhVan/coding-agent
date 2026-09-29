@@ -1,5 +1,5 @@
-import os
-import litellm
+from openai import OpenAI
+
 from core.config import MODEL, BASE_URL, CONTEXT_WINDOW, API_KEY
 
 
@@ -7,17 +7,32 @@ def get_context_window(model: str = None) -> int:
     return CONTEXT_WINDOW
 
 
-def complete(messages, tools=None, model: str = None,base_url: str = None,api_key: str = None, stream: bool = False, **kwargs):
-    kwargs.setdefault("timeout", 120)
-    return litellm.completion(
-        model=model or MODEL,
-        messages=messages,
-        tools=tools,
-        stream=stream,
-        base_url=base_url or BASE_URL,
-        api_key=api_key or API_KEY,
+def complete(
+    messages,
+    tools=None,
+    model: str = None,
+    base_url: str = None,
+    api_key: str = None,
+    stream: bool = False,
+    **kwargs,
+):
+    client_options = {
+        "api_key": api_key or API_KEY,
+        "base_url": base_url or BASE_URL,
+        "timeout": kwargs.pop("timeout", 120),
+        "max_retries": kwargs.pop("max_retries", 0),
+    }
+
+    request = {
+        "model": model or MODEL,
+        "messages": messages,
+        "stream": stream,
         **kwargs,
-    )
+    }
+    if tools is not None:
+        request["tools"] = tools
+
+    return OpenAI(**client_options).chat.completions.create(**request)
 
 
 def complete_text(prompt: str, model: str = None, base_url: str = None, api_key: str = None) -> str:

@@ -29,7 +29,7 @@ class ControlPaths:
     @staticmethod
     def default_root() -> Path:
         base = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state"))
-        return base / "sang-coding-agent"
+        return base / "coding-agent"
 
     @classmethod
     def create(cls, root: str | Path, session_id: str, source_workspace: str | Path) -> "ControlPaths":
