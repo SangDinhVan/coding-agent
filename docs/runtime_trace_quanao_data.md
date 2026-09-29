@@ -1,5 +1,9 @@
 # DATA TRACE — `tạo web bán quần áo đi (quanao.html)`
 
+> **Historical snapshot:** trace này ghi lại một lần chạy trước Memory/Context
+> MVP ngày 2026-09-29. Cơ chế background memory trong trace là hành vi cũ, không
+> phải behavior hiện tại.
+>
 > [!IMPORTANT]
 > Một user turn (`run_turn`) gồm 6 agent iterations. Trong tài liệu này “Turn” là toàn phiên; “Iteration” là mỗi vòng gọi model. API key được thay bằng `[REDACTED]`. Hidden reasoning không có trong API response.
 

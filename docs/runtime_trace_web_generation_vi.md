@@ -1,5 +1,9 @@
 # Runtime trace: prompt tạo website đồ ăn vặt
 
+> **Historical snapshot:** trace này ghi lại một lần chạy trước Memory/Context
+> MVP ngày 2026-09-29. Cơ chế background memory trong trace là hành vi cũ, không
+> phải behavior hiện tại.
+>
 Báo cáo này tái dựng một lần chạy thật của coding agent với prompt nguyên văn:
 
 > `làm web 1 file html bán đồ ăn vặt duy nhất bỏ vào folder output`

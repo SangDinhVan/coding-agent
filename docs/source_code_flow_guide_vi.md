@@ -116,7 +116,8 @@ main.py
        ├── EventStore ───────────► events.jsonl
        ├── replay/reduce_event ──► RuntimeState
        ├── MemoryManager ────────► PROJECT.md
-       ├── Compactor ────────────► LiteLLM summary call
+       ├── CheckpointStore ──────► checkpoints/<session-id>.json
+       ├── Compactor ────────────► token budget + LiteLLM summary call
        ├── llm.complete ─────────► model provider
        ├── UpdatePlanTool ───────► Agent._apply_plan_action
        └── ToolExecutor
@@ -134,7 +135,7 @@ main.py
 | Package/file | Trách nhiệm |
 |---|---|
 | [`src/main.py`](../src/main.py) | Parse CLI, chọn chat, tạo/resume sandbox, chạy REPL và xử lý control command. |
-| [`src/agent/loop.py`](../src/agent/loop.py) | Vòng lặp model/tool, prompt, plan action, final-answer guard và memory update. |
+| [`src/agent/loop.py`](../src/agent/loop.py) | Vòng lặp model/tool, prompt, durable context, plan action và final-answer guard. |
 | [`src/agent/state.py`](../src/agent/state.py) | Projection read-only của sandbox/workspace để đưa vào prompt. |
 | [`src/memory/event_store.py`](../src/memory/event_store.py) | Journal JSONL append-only, khóa writer, validate, redaction và chuyển event thành model messages. |
 | [`src/runtime/models.py`](../src/runtime/models.py) | Enum/dataclass cho turn, plan, tool execution, result và recovery. |
@@ -143,8 +144,9 @@ main.py
 | [`src/tools/`](../src/tools/) | Contract, schema và implementation của các tool model nhìn thấy. |
 | [`src/sandbox/`](../src/sandbox/) | Path/state, workspace policy, Docker backend, session lifecycle và legacy changeset. |
 | [`sandbox-image/`](../sandbox-image/) | Runtime image và hai helper an toàn chạy bên trong child. |
-| [`src/context/compactor.py`](../src/context/compactor.py) | Rút gọn history khi gần đầy context window. |
-| [`src/memory/manager.py`](../src/memory/manager.py) | Đọc và cập nhật memory `PROJECT.md` qua nhiều session. |
+| [`src/context/compactor.py`](../src/context/compactor.py) | Dựng context theo token budget và tạo checkpoint tăng dần khi cần. |
+| [`src/context/checkpoint.py`](../src/context/checkpoint.py) | Validate schema và lưu checkpoint theo session bằng atomic replace. |
+| [`src/memory/manager.py`](../src/memory/manager.py) | Đọc và sửa curated memory `PROJECT.md` theo lệnh explicit của user. |
 | [`src/model/llm.py`](../src/model/llm.py) | Adapter mỏng quanh LiteLLM và token counting. |
 
 ---
@@ -262,7 +264,9 @@ Chat được lưu dưới:
 <state-root>/
 ├── chats/
 │   └── <session-id>.jsonl
-├── projects/default/
+├── checkpoints/
+│   └── <session-id>.json
+├── projects/<workspace-identity>/
 │   └── PROJECT.md
 └── sandboxes/<session-id>/
     ├── workspace/                 # dùng bởi shadow mode
@@ -310,6 +314,9 @@ Identity này ngăn resume nhầm cùng session với một workspace khác.
 | `exit`, `quit` | Thoát vòng lặp. |
 | `/img path1,path2 prompt` | Encode ảnh thành data URL và gửi cùng text. |
 | `resume` | Tiếp tục active turn bị dừng trước đó. |
+| `/memory` | In curated memory của workspace hiện tại, không gọi model. |
+| `/remember <fact>` | Thêm một fact; fact trùng case-insensitive không được ghi lại. |
+| `/forget <id-or-fact>` | Xóa đúng một entry theo ID hoặc exact fact. |
 | `/changes` | Live: hướng dẫn dùng Git/IDE. Shadow: seal và hiển thị changeset. |
 | `/apply` | Live: không cần. Shadow: yêu cầu exact hash và note trước khi apply. |
 | `/discard` | Destroy sandbox; live changes vẫn còn trong workspace. |
@@ -344,8 +351,7 @@ Agent._drive_turn
   ├── CompletionRequested(candidate)
   ├── completion_blockers() == []
   ├── AssistantMessageRecorded(final=true)
-  ├── TurnCompleted
-  └── background MemoryManager.update()
+  └── TurnCompleted
 ```
 
 ### 4.2. Happy path có tool call
@@ -402,29 +408,44 @@ SYSTEM_PROMPT_TEMPLATE
 └── WorkspaceState.render         # sandbox/image/network/file counts
 ```
 
-[`Agent._build_context()`](../src/agent/loop.py) lấy message history từ journal, bỏ system message cũ, rồi đặt system message mới ở đầu.
+[`Agent._build_context()`](../src/agent/loop.py) lấy các message event kèm sequence
+từ journal, ghép checkpoint hợp lệ của session (nếu có), rồi chỉ giữ raw
+message có sequence lớn hơn `covers_through_seq`.
 
-Do đó system prompt luôn phản ánh projection runtime mới nhất, thay vì tin vào system message đã ghi từ trước.
+Do đó system prompt luôn phản ánh projection runtime mới nhất, thay vì tin vào
+system message đã ghi từ trước. `PROJECT.md` được ghi rõ là advisory; system/user
+instruction, repository, test, journal và runtime state có độ ưu tiên cao hơn.
 
-### 4.5. Compaction
+### 4.5. Compaction và checkpoint
 
-[`Compactor.should_compact()`](../src/context/compactor.py) compact khi estimated tokens vượt:
+[`ContextBudget`](../src/context/compactor.py) tính input budget từ context window:
 
 ```text
-CONTEXT_WINDOW × 70%
+available input
+= context window
+- 16,000 output tokens
+- 16,000 tool tokens
+- 8,000 safety tokens
 ```
 
-Với config hiện tại, `CONTEXT_WINDOW = 256000`.
+Compactor chỉ chạy khi context hiện tại vượt budget này. Nó dành tối đa 8,000
+token cho checkpoint và tối đa 20,000 token cho các user message cũ; user
+message mới nhất luôn được giữ nguyên nếu bản thân nó vừa total budget.
 
-Compactor:
+Khi cần compact, Compactor:
 
-- giữ system messages;
-- giữ ít nhất 10 non-system messages gần nhất;
-- tóm tắt phần cũ bằng một model call riêng;
-- không tách assistant tool call khỏi các tool result tương ứng;
-- trả summary như một system message tạm thời.
+- nhóm assistant tool call và toàn bộ matching tool result thành một đơn vị;
+- giữ raw suffix mới nhất vừa budget, không tách tool interaction;
+- chỉ summary phần journal chưa được checkpoint trước bao phủ;
+- hợp nhất phần đó với checkpoint cũ thành schema có `covers_through_seq`;
+- validate và lưu checkpoint atomically trước main model call;
+- dựng lại context bằng system message + checkpoint + raw message mới hơn cutoff;
+- append `ContextCompacted` với token/latency measurements vào journal.
 
-Summary compaction **không được ghi vào journal**. Journal vẫn giữ history gốc; compacted context chỉ tồn tại cho lần gọi model đó.
+`ContextCompacted` là reducer no-op: nó không thay đổi turn, plan, tool hay
+recovery state. Journal gốc không bị truncate hoặc rewrite. Nếu user message
+hiện tại quá lớn, checkpoint invalid, model summary lỗi hoặc context sau compact
+vẫn quá budget, iteration fail rõ ràng thay vì âm thầm bỏ nội dung.
 
 ### 4.6. Gọi model và nhận stream
 
@@ -1293,34 +1314,55 @@ Nếu interruption xảy ra sau `ToolStarted` mà outcome chưa rõ:
 
 ### 16.1. `PROJECT.md` thực tế nằm ở đâu?
 
-Default của [`MemoryManager`](../src/memory/manager.py) là:
+Agent tạo [`MemoryManager`](../src/memory/manager.py) bằng workspace identity:
 
 ```text
-<state-root>/projects/default/PROJECT.md
+<state-root>/projects/<workspace-identity>/PROJECT.md
 ```
 
-File tracked [`src/memory/private/PROJECT.md`](../src/memory/private/PROJECT.md) **không phải default runtime path** trong code hiện tại. Nó là file repository cũ/mẫu dữ liệu, không nên dùng để suy luận memory mà session đang đọc nếu chưa kiểm tra state root.
+Identity là SHA-256 của resolved path, device và inode. Các session dùng cùng
+workspace và state root dùng chung file; workspace khác không đọc file đó. File
+tracked [`src/memory/private/PROJECT.md`](../src/memory/private/PROJECT.md) không
+phải runtime path.
 
 ### 16.2. Đọc memory
 
-Mỗi lần build system prompt, Agent gọi `memory_manager.read()`. Do đó facts append sau turn trước có thể vào prompt turn sau.
+Mỗi lần build system prompt, Agent gọi `memory_manager.read()`. Nội dung được
+đưa vào prompt như advisory facts, không được ghi đè instruction, code/config,
+test, journal hoặc runtime state.
 
-### 16.3. Cập nhật memory
+### 16.3. Curated memory
 
-Sau khi turn `COMPLETED`:
+Memory chỉ thay đổi qua control command trong REPL:
 
-1. Agent render tối đa 20 message gần nhất.
-2. Spawn daemon thread.
-3. Gọi model bằng prompt yêu cầu JSON `{project_md_append: ...}`.
-4. Nếu parse được và nội dung không rỗng, append vào `PROJECT.md`.
+- `/memory` đọc file;
+- `/remember <fact>` normalize whitespace, chống duplicate case-insensitive và
+  thêm entry có ID 8 ký tự;
+- `/forget <id-or-fact>` xóa một exact match, fail nếu không có hoặc ambiguous.
 
-Memory update không block final response. Nếu process thoát ngay, daemon thread không được guarantee hoàn tất.
+Không có model call tự động để ghi memory sau turn. Mỗi write dùng temp sibling,
+`fsync` và `os.replace`; lỗi ghi giữ nguyên file trước đó.
 
-### 16.4. Ba loại “state” không nên nhầm
+### 16.4. Checkpoint và resume
+
+Checkpoint nằm tại:
+
+```text
+<state-root>/checkpoints/<session-id>.json
+```
+
+Khi khởi tạo Agent, `CheckpointStore` chỉ nhận checkpoint có đúng session ID và
+`covers_through_seq` nằm trong journal hiện tại. Checkpoint thiếu/hỏng được xem
+như unavailable; runtime vẫn replay từ journal. Khi resume, provider context là
+system projection + checkpoint + raw message event sau cutoff, và chỉ compact
+lại nếu tổng token vượt budget hiện tại.
+
+### 16.5. Bốn loại “state” không nên nhầm
 
 | State | Nguồn | Mục đích |
 |---|---|---|
 | Runtime lifecycle | JSONL journal | Authoritative turn/plan/tool/recovery. |
+| Compaction checkpoint | JSON theo session | Handoff context tăng dần, không quyết định lifecycle. |
 | Project memory | `PROJECT.md` | Facts hỗ trợ reasoning qua nhiều chat. |
 | Workspace projection | baseline manifest + sandbox metadata | Thông tin môi trường đưa vào prompt. |
 
@@ -1373,7 +1415,7 @@ Một turn có nhiều vùng thời gian khác nhau:
       + [model generates text/tool JSON]
       + [tool executes in sandbox]
       + [model reads result and generates final]
-      + [optional background memory update]
+      + [optional checkpoint summary when input exceeds budget]
 ```
 
 ### 18.1. Dấu hiệu quan sát
@@ -1381,7 +1423,8 @@ Một turn có nhiều vùng thời gian khác nhau:
 - `[model] waiting for response (iteration N)...`: đang chờ/stream từ provider.
 - `[model] receiving tool call write: X KiB`: model đang sinh arguments lớn, chưa chắc tool đã chạy.
 - `tool> write`: Agent đã nhận xong call và bắt đầu tool lifecycle.
-- `[memory] updating PROJECT.md...`: turn đã complete, memory update chạy background.
+- `[context] ignoring invalid checkpoint: ...`: checkpoint không hợp lệ bị bỏ
+  qua; journal vẫn được dùng nguyên vẹn.
 
 ### 18.2. Timeout khác nhau
 
@@ -1408,6 +1451,9 @@ Một file HTML 40–50 KiB được truyền nguyên trong JSON string có th�
 | Thiếu required argument | tool validation | `ToolFailed`, không side effect. |
 | Helper/transport outcome mơ hồ | `DockerBackend` + executor | Stop child, recovery required. |
 | Model provider lỗi | `Agent._drive_turn()` | `TurnFailed(category=model)`. |
+| Checkpoint hỏng/sai session | `CheckpointStore` + `Agent.__init__()` | Warning, bỏ checkpoint, tiếp tục từ journal. |
+| Summary/checkpoint không hợp lệ | `Compactor` | Fail iteration rõ ràng; giữ checkpoint cũ và journal. |
+| Current user vượt input budget | `Compactor` | Fail rõ ràng, không truncate nội dung. |
 | Final khi plan chưa xong | completion guard | `CompletionBlocked`; lần ba fail turn. |
 | Hết 20 iteration | Agent loop | `TurnFailed(category=max_iterations)`. |
 | Journal transition sai | reducer/replay | `JournalCorruptionError`. |
@@ -1425,9 +1471,11 @@ Repository dùng `unittest`. Các test file là nơi tốt nhất để xem beha
 | Test file | Phạm vi |
 |---|---|
 | [`test_main.py`](../tests/test_main.py) | Chat selection/resume, REPL control commands, sandbox factory, approval CLI. |
-| [`test_agent_loop.py`](../tests/test_agent_loop.py) | Model stream, tool batches, interruption, final messages, progress và memory. |
+| [`test_agent_loop.py`](../tests/test_agent_loop.py) | Model stream, durable context/checkpoint, tool batches, interruption và final messages. |
 | [`test_model_llm.py`](../tests/test_model_llm.py) | Timeout mặc định và explicit retry passthrough. |
-| [`test_compactor.py`](../tests/test_compactor.py) | Threshold, summary và atomic tool interaction groups. |
+| [`test_memory_manager.py`](../tests/test_memory_manager.py) | Curated memory, workspace isolation và atomic/private writes. |
+| [`test_checkpoint.py`](../tests/test_checkpoint.py) | Strict checkpoint schema, scope và atomic persistence. |
+| [`test_compactor.py`](../tests/test_compactor.py) | Token budget, incremental summary và atomic tool interaction groups. |
 
 ### 20.2. Journal, reducer, plan và recovery
 
@@ -1546,7 +1594,6 @@ Agent._drive_turn
 → completion_blockers
 → AssistantMessageRecorded(final)
 → TurnCompleted
-→ MemoryManager.update (background)
 ```
 
 ### 22.4. Tuyến theo restart
@@ -1559,6 +1606,8 @@ select_chat_path
 → Agent.__init__
 → EventStore.read_all
 → replay
+→ CheckpointStore.load
+→ context = system + checkpoint + uncovered message events
 → pending_runtime_actions
 → resume_active_turn
 ```
@@ -1620,10 +1669,13 @@ main.py REPL
 Agent.run_turn / resume_active_turn
  │
  ├──── build prompt
- │       ├── PROJECT.md
+ │       ├── workspace-scoped PROJECT.md (advisory)
  │       ├── RuntimeState projection
  │       ├── WorkspaceState projection
- │       └── message history ── optional Compactor
+ │       ├── session checkpoint
+ │       └── uncovered message events ── token-aware Compactor
+ │                                         ├── atomic checkpoint save
+ │                                         └── ContextCompacted event
  │
  ├──── LiteLLM stream
  │       ├── text delta

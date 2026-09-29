@@ -1,6 +1,11 @@
 # Hướng dẫn toàn bộ luồng Runtime State Management
 
-> Tài liệu này giải thích **code hiện tại trên `main`**, không chỉ mô tả ý tưởng thiết kế.
+> **Historical snapshot:** tài liệu này được chụp trước Memory/Context MVP ngày
+> 2026-09-29. Phần runtime lifecycle vẫn là walkthrough lịch sử hữu ích, nhưng
+> các mô tả về `MemoryManager.update()` không phản ánh source hiện tại.
+>
+> Tài liệu này giải thích **code trên `main` tại thời điểm trace được ghi**, không
+> chỉ mô tả ý tưởng thiết kế.
 > Mục tiêu là giúp người đã hiểu agent loop cũ có thể lần theo code mới từ lúc
 > người dùng nhập prompt đến lúc turn hoàn thành, bị chặn, thất bại hoặc được
 > khôi phục sau crash.

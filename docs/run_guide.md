@@ -78,7 +78,43 @@ docker compose run --build --rm coding-agent resume --last
 Gõ `exit` trong ứng dụng để thoát. Mỗi lần chạy, Compose build image điều
 khiển nếu cần; entrypoint bên trong container tiếp tục build image sandbox.
 
-## 4. Khi gặp lỗi Docker socket
+## 4. Memory và context bền vững
+
+Các lệnh memory được xử lý trực tiếp trong REPL, không gọi model:
+
+```text
+/memory
+/remember <fact>
+/forget <id-or-fact>
+```
+
+- `/memory` in toàn bộ `PROJECT.md` của workspace hiện tại.
+- `/remember` thêm một fact đã chuẩn hóa; fact trùng không được ghi lại.
+- `/forget` xóa đúng một entry theo ID hoặc nội dung fact chính xác.
+- Lỗi input hoặc ghi file được in dưới dạng `Memory error: ...` và không làm
+  thay đổi file hợp lệ trước đó.
+
+Khi chạy bằng Compose, `--state-root` là `/state` trong volume
+`coding-agent-state`. Layout liên quan là:
+
+```text
+<state-root>/
+├── chats/<session-id>.jsonl
+├── checkpoints/<session-id>.json
+└── projects/<workspace-identity>/PROJECT.md
+```
+
+`PROJECT.md` chỉ chứa memory được user chủ động quản lý qua các lệnh trên;
+agent không tự gọi model để ghi memory sau mỗi turn. Memory này là thông tin
+tham khảo: instruction hiện tại, code/configuration, test, journal và runtime
+state luôn có độ ưu tiên cao hơn khi có xung đột.
+
+Checkpoint được tạo tự động khi context vượt token budget và được dùng lại khi
+resume đúng session. File checkpoint được ghi atomically. Checkpoint thiếu hoặc
+hỏng sẽ bị bỏ qua với warning và agent dựng context từ journal; lỗi tạo/lưu
+checkpoint được báo ra ngoài thay vì xóa, truncate hoặc sửa journal.
+
+## 5. Khi gặp lỗi Docker socket
 
 Kiểm tra container có nói chuyện được với daemon, **không khởi động agent**:
 
