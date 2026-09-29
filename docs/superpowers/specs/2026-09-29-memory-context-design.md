@@ -310,4 +310,3 @@ The MVP is complete when all of the following are true:
 9. Oversized current user input fails explicitly without silent truncation.
 10. Existing runtime, recovery, plan, sandbox, and journal tests continue to
     pass.
-
