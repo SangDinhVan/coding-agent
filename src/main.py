@@ -140,6 +140,8 @@ def _default_agent_factory(
         events_path=str(events_path),
         sandbox=session,
         tool_registry=ToolRegistry(session),
+        state_root=state_root,
+        workspace_identity=paths.workspace_identity,
     )
 
 
@@ -171,6 +173,24 @@ def run_repl(
             if lowered in {"exit", "quit"}:
                 print_fn("bye")
                 break
+            if lowered == "/memory":
+                print_fn(agent.memory_manager.read())
+                continue
+            if lowered == "/remember" or lowered.startswith("/remember "):
+                try:
+                    entry, created = agent.memory_manager.remember(user_text[len("/remember"):].strip())
+                    action = "Remembered" if created else "Already remembered"
+                    print_fn(f"{action} [{entry.memory_id}] {entry.fact}")
+                except (OSError, ValueError) as error:
+                    print_fn(f"Memory error: {error}")
+                continue
+            if lowered == "/forget" or lowered.startswith("/forget "):
+                try:
+                    entry = agent.memory_manager.forget(user_text[len("/forget"):].strip())
+                    print_fn(f"Forgot [{entry.memory_id}] {entry.fact}")
+                except (OSError, ValueError) as error:
+                    print_fn(f"Memory error: {error}")
+                continue
             if lowered == "/changes":
                 if getattr(agent, "workspace_mode", WorkspaceMode.SHADOW) == WorkspaceMode.LIVE:
                     print_fn("Changes are already in the workspace; review them with git diff or your IDE.")

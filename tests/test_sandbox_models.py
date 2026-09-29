@@ -86,13 +86,11 @@ if __name__ == "__main__":
     unittest.main()
 
 class DefaultStatePathTests(unittest.TestCase):
-    def test_chat_and_memory_defaults_live_under_control_state_root(self):
+    def test_chat_default_lives_under_control_state_root(self):
         from memory.event_store import DEFAULT_CHATS_DIR
-        from memory.manager import DEFAULT_PROJECT_MD_PATH
 
         expected = ControlPaths.default_root()
         self.assertEqual(DEFAULT_CHATS_DIR, expected / "chats")
-        self.assertEqual(DEFAULT_PROJECT_MD_PATH, expected / "projects" / "default" / "PROJECT.md")
 
 class ExecutionModelTests(unittest.TestCase):
     def test_exec_request_enforces_timeout_ceiling(self):

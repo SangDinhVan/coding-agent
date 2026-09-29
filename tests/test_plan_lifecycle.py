@@ -12,9 +12,6 @@ class PlanLifecycleTests(unittest.TestCase):
     def agent(self, directory):
         agent = Agent(str(Path(directory) / "events.jsonl"), workdir=directory)
         self.addCleanup(agent.close)
-        update = patch.object(Agent, "_update_memory_bg", return_value=None)
-        update.start()
-        self.addCleanup(update.stop)
         return agent
 
     def test_optional_without_plan_allows_completion(self):

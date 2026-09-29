@@ -1,13 +1,14 @@
-"""MemoryManager: đọc và cập nhật PROJECT.md xuyên các session."""
+"""Workspace-scoped, user-curated project memory."""
 
-import json
+from __future__ import annotations
+
+import os
+import re
+import tempfile
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from uuid import uuid4
 
-from core.paths import ControlPaths
-from model import llm
-
-DEFAULT_PROJECT_MD_PATH = ControlPaths.default_root() / "projects" / "default" / "PROJECT.md"
 
 PROJECT_MD_TEMPLATE = """# PROJECT.md
 
@@ -32,59 +33,127 @@ PROJECT_MD_TEMPLATE = """# PROJECT.md
 ## Failed Approaches
 (chưa có dữ liệu — mục này BẮT BUỘC giữ lại mọi giải pháp đã thử mà thất bại,
 để agent không lặp lại sai lầm cũ)
+
+## Curated Memories
+
 """
 
-DIFF_PROMPT_TEMPLATE = """\
-Bạn đang giúp duy trì PROJECT.md, file memory bền vững cho coding agent.
-File chứa facts về project hiện tại: Overview, Architecture, Important Decisions,
-Hard Constraints, Coding Conventions, Known Problems và Failed Approaches.
+_SECTION = "## Curated Memories"
+_ENTRY = re.compile(r"^- \[([0-9a-f]{8})\] (.+)$")
 
---- PROJECT.md hiện tại ---
-{project_md}
 
---- Đoạn hội thoại gần đây ---
-{recent_conversation}
-
-Xác định thông tin MỚI hoặc THAY ĐỔI thực sự quan trọng và bền vững cần thêm.
-CHỈ trả JSON đúng format sau, không thêm text hoặc markdown code fence:
-
-{{"project_md_append": "<đoạn text cần thêm, rỗng nếu không có gì>"}}
-"""
+@dataclass(frozen=True)
+class MemoryEntry:
+    memory_id: str
+    fact: str
 
 
 class MemoryManager:
-    def __init__(
-        self,
-        project_md_path: str | Path = DEFAULT_PROJECT_MD_PATH,
-        model: Optional[str] = None,
-    ):
+    def __init__(self, project_md_path: str | Path):
         self.project_md_path = Path(project_md_path)
-        self.model = model
         self._ensure_file_exists()
 
-    def _ensure_file_exists(self):
-        self.project_md_path.parent.mkdir(parents=True, exist_ok=True)
+    def _ensure_file_exists(self) -> None:
+        self.project_md_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.project_md_path.parent.chmod(0o700)
         if not self.project_md_path.exists():
-            self.project_md_path.write_text(PROJECT_MD_TEMPLATE, encoding="utf-8")
+            self._write(PROJECT_MD_TEMPLATE)
+        else:
+            self.project_md_path.chmod(0o600)
 
     def read(self) -> str:
-        """Đọc PROJECT.md để đưa vào system prompt mỗi turn."""
         return self.project_md_path.read_text(encoding="utf-8")
 
-    def update(self, recent_conversation: str) -> dict:
-        """Nhờ model chọn project facts bền vững rồi append nếu có."""
-        prompt = DIFF_PROMPT_TEMPLATE.format(
-            project_md=self.read(),
-            recent_conversation=recent_conversation,
-        )
-        raw_response = llm.complete_text(prompt, model=self.model)
-        try:
-            diff = json.loads(raw_response)
-        except json.JSONDecodeError:
-            return {"project_md_append": "", "error": "invalid_json"}
+    def entries(self) -> tuple[MemoryEntry, ...]:
+        text = self.read()
+        start, end = self._section_bounds(text)
+        entries = []
+        for line in text[start:end].splitlines():
+            match = _ENTRY.fullmatch(line)
+            if match:
+                entries.append(MemoryEntry(match.group(1), match.group(2)))
+        return tuple(entries)
 
-        project_append = (diff.get("project_md_append") or "").strip()
-        if project_append:
-            with self.project_md_path.open("a", encoding="utf-8") as f:
-                f.write(f"\n{project_append}\n")
-        return {"project_md_append": project_append}
+    def remember(self, fact: str) -> tuple[MemoryEntry, bool]:
+        normalized = self._normalize(fact)
+        entries = list(self.entries())
+        duplicate = next(
+            (entry for entry in entries if entry.fact.casefold() == normalized.casefold()),
+            None,
+        )
+        if duplicate is not None:
+            return duplicate, False
+        used_ids = {entry.memory_id for entry in entries}
+        memory_id = uuid4().hex[:8]
+        while memory_id in used_ids:
+            memory_id = uuid4().hex[:8]
+        entry = MemoryEntry(memory_id, normalized)
+        entries.append(entry)
+        self._write_entries(entries)
+        return entry, True
+
+    def forget(self, query: str) -> MemoryEntry:
+        normalized = self._normalize(query)
+        entries = self.entries()
+        matches = [
+            entry for entry in entries
+            if entry.memory_id == normalized.casefold()
+            or entry.fact.casefold() == normalized.casefold()
+        ]
+        if not matches:
+            raise ValueError("memory not found")
+        if len(matches) != 1:
+            raise ValueError("memory query is ambiguous")
+        removed = matches[0]
+        self._write_entries([entry for entry in entries if entry != removed])
+        return removed
+
+    @staticmethod
+    def _normalize(value: str) -> str:
+        normalized = " ".join(value.split())
+        if not normalized:
+            raise ValueError("memory fact/query cannot be empty")
+        return normalized
+
+    @staticmethod
+    def _section_bounds(text: str) -> tuple[int, int]:
+        header = text.find(_SECTION)
+        if header < 0:
+            return len(text), len(text)
+        start = header + len(_SECTION)
+        next_header = re.search(r"^##\s", text[start:], flags=re.MULTILINE)
+        end = start + next_header.start() if next_header else len(text)
+        return start, end
+
+    def _write_entries(self, entries: list[MemoryEntry]) -> None:
+        text = self.read()
+        start, end = self._section_bounds(text)
+        if start == len(text) and _SECTION not in text:
+            text = text.rstrip() + f"\n\n{_SECTION}"
+            start = len(text)
+            end = start
+        body = "\n\n"
+        if entries:
+            body += "\n".join(f"- [{entry.memory_id}] {entry.fact}" for entry in entries) + "\n"
+        body += "\n"
+        self._write(text[:start] + body + text[end:].lstrip("\n"))
+
+    def _write(self, text: str) -> None:
+        self.project_md_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.project_md_path.parent.chmod(0o700)
+        temporary_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                "w", encoding="utf-8", dir=self.project_md_path.parent,
+                prefix=f".{self.project_md_path.name}.", delete=False,
+            ) as temporary:
+                temporary_path = Path(temporary.name)
+                temporary.write(text)
+                temporary.flush()
+                os.fsync(temporary.fileno())
+            temporary_path.chmod(0o600)
+            os.replace(temporary_path, self.project_md_path)
+            self.project_md_path.chmod(0o600)
+        finally:
+            if temporary_path is not None and temporary_path.exists():
+                temporary_path.unlink()

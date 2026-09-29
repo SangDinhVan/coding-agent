@@ -17,3 +17,4 @@ dist/
 
 # Local chat history
 memory/chats/
+.superpowers/

@@ -36,6 +36,25 @@ class MainTests(unittest.TestCase):
         run_repl(Path("session.jsonl"), input_fn=lambda prompt: "exit", print_fn=lambda text: None, agent_factory=lambda path: agent)
         agent.close.assert_called_once()
 
+    def test_memory_commands_are_handled_without_model_turns(self):
+        agent = MagicMock()
+        agent.pending_runtime_actions.return_value = []
+        agent.runtime_state.active_turn_id = None
+        agent.memory_manager.read.return_value = "# PROJECT.md"
+        agent.memory_manager.remember.return_value = (MagicMock(memory_id="a1b2c3d4", fact="uses pytest"), True)
+        agent.memory_manager.forget.return_value = MagicMock(memory_id="a1b2c3d4", fact="uses pytest")
+        inputs = iter(["/memory", "/remember uses pytest", "/forget a1b2c3d4", "exit"])
+        outputs = []
+        run_repl(
+            Path("session.jsonl"), input_fn=lambda prompt: next(inputs),
+            print_fn=outputs.append, agent_factory=lambda path: agent,
+        )
+        agent.memory_manager.read.assert_called_once_with()
+        agent.memory_manager.remember.assert_called_once_with("uses pytest")
+        agent.memory_manager.forget.assert_called_once_with("a1b2c3d4")
+        agent.run_turn.assert_not_called()
+        self.assertIn("# PROJECT.md", outputs)
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -149,6 +168,8 @@ class SandboxFactoryTests(unittest.TestCase):
             agent_type.assert_called_once()
             recover.assert_called_once_with(paths, Path(workspace).resolve())
             self.assertIs(agent_type.call_args.kwargs["sandbox"], session)
+            self.assertEqual(agent_type.call_args.kwargs["state_root"], Path(state))
+            self.assertEqual(agent_type.call_args.kwargs["workspace_identity"], paths.workspace_identity)
             self.assertEqual(session_type.call_args.kwargs["mode"], WorkspaceMode.LIVE)
 
     def test_existing_stopped_session_restores_exact_container_and_reconciles_before_agent(self):

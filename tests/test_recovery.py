@@ -109,7 +109,7 @@ class RecoveryTests(unittest.TestCase):
         first.close()
         resumed = Agent(str(self.path), workdir=self.directory.name)
         self.addCleanup(resumed.close)
-        with patch.object(Agent, "_update_memory_bg", return_value=None), patch("agent.loop.llm.complete", return_value=stream_text("done")):
+        with patch("agent.loop.llm.complete", return_value=stream_text("done")):
             self.assertEqual(resumed.resume_active_turn(), "done")
         users = [m for m in resumed.event_store.to_messages() if m["role"] == "user"]
         self.assertEqual(len(users), 1)
@@ -166,10 +166,7 @@ class BatchResumeTests(RecoveryTests):
             agent.run_turn("g")
         approval = agent.pending_runtime_actions()[0]
         agent.resolve_approval(approval.execution_id, True, "approved")
-        with (
-            patch.object(Agent, "_update_memory_bg", return_value=None),
-            patch("agent.loop.llm.complete", return_value=stream_text("done")) as complete,
-        ):
+        with patch("agent.loop.llm.complete", return_value=stream_text("done")) as complete:
             agent.resume_active_turn()
         self.assertEqual(fake.calls, 2)
         self.assertEqual(complete.call_count, 1)

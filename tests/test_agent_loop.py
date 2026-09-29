@@ -21,11 +21,6 @@ class FakeRegistry:
 
 
 class AgentLoopCharacterizationTests(unittest.TestCase):
-    def setUp(self):
-        memory_update = patch.object(Agent, "_update_memory_bg", return_value=None)
-        memory_update.start()
-        self.addCleanup(memory_update.stop)
-
     def agent(self, directory: str, tool=None) -> Agent:
         agent = Agent(
             str(Path(directory) / "events.jsonl"),
@@ -38,10 +33,29 @@ class AgentLoopCharacterizationTests(unittest.TestCase):
     def test_direct_text_completes_and_is_persisted(self):
         with tempfile.TemporaryDirectory() as directory:
             agent = self.agent(directory)
-            with patch("agent.loop.llm.complete", return_value=stream_text("done")):
+            with patch("agent.loop.llm.complete", return_value=stream_text("done")), patch(
+                "agent.loop.llm.complete_text"
+            ) as complete_text:
                 self.assertEqual(agent.run_turn("goal"), "done")
+            complete_text.assert_not_called()
             self.assertEqual(agent.turn_state.status.value, "completed")
             self.assertEqual([m["role"] for m in agent.event_store.to_messages()], ["user", "assistant"])
+
+    def test_project_memory_is_isolated_by_workspace_identity(self):
+        with tempfile.TemporaryDirectory() as state, tempfile.TemporaryDirectory() as workspace:
+            first = Agent(
+                str(Path(state) / "first.jsonl"), workdir=workspace,
+                state_root=state, workspace_identity="first",
+            )
+            second = Agent(
+                str(Path(state) / "second.jsonl"), workdir=workspace,
+                state_root=state, workspace_identity="second",
+            )
+            self.addCleanup(first.close)
+            self.addCleanup(second.close)
+            first.memory_manager.remember("Only first workspace knows this.")
+            self.assertIn("Only first workspace knows this.", first._build_system_message()["content"])
+            self.assertNotIn("Only first workspace knows this.", second._build_system_message()["content"])
 
     def test_tool_result_is_sent_back_before_final_response(self):
         with tempfile.TemporaryDirectory() as directory:

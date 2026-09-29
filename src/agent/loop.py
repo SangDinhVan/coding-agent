@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import base64
 import mimetypes
-import threading
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Optional
 from uuid import uuid4
 
 from agent.state import WorkspaceState
 from context.compactor import Compactor
+from core.paths import project_memory_path, workspace_identity as compute_workspace_identity
 from memory.event_store import EventStore
 from memory.manager import MemoryManager
 from model import llm
@@ -80,10 +81,16 @@ class Agent:
         approval_handler=None,
         sandbox=None,
         tool_registry=None,
+        state_root: str | Path | None = None,
+        workspace_identity: str | None = None,
     ):
         self.model = model
         self.event_store = EventStore(path=events_path)
-        self.memory_manager = MemoryManager(model=model)
+        self.state_root = Path(state_root) if state_root is not None else Path(events_path).parent
+        self.workspace_identity = workspace_identity or compute_workspace_identity(workdir)
+        self.memory_manager = MemoryManager(
+            project_memory_path(self.state_root, self.workspace_identity)
+        )
         self.compactor = Compactor(model=model)
         self.sandbox = sandbox
         self.tool_registry = tool_registry or ToolRegistry(sandbox)
@@ -424,10 +431,6 @@ class Agent:
                 turn_id=turn_id,
             )
 
-        if self.turn_state.status == TurnStatus.COMPLETED:
-            recent = self._render_recent_for_memory()
-            print("[memory] updating PROJECT.md...", flush=True)
-            threading.Thread(target=self._update_memory_bg, args=(recent,), daemon=True).start()
         return final_text
 
     def _apply_plan_action(self, *, execution_id: str, turn_id: str, action: str, **arguments) -> ToolResult:
@@ -547,13 +550,6 @@ class Agent:
         except (KeyError, TypeError, ValueError) as error:
             return ToolResult(str(error), f"Error: {error}", False)
 
-    def _update_memory_bg(self, recent: str):
-        try:
-            self.memory_manager.update(recent)
-            print(flush=True)
-        except Exception as error:
-            print(f"[memory] update failed: {error}", flush=True)
-
     def _execute_tool_call(self, tool_call) -> ToolResult:
         turn_id = self.runtime_state.active_turn_id
         if turn_id is None:
@@ -562,12 +558,3 @@ class Agent:
         result = self.tool_executor.execute(execution_id)
         self._refresh()
         return result
-
-    def _render_recent_for_memory(self, last_n: int = 20) -> str:
-        lines = []
-        for message in self.event_store.to_messages()[-last_n:]:
-            content = message.get("content", "")
-            if isinstance(content, list):
-                content = llm.content_to_text(content)
-            lines.append(f"{message['role']}: {content}")
-        return "\n".join(lines)
