@@ -258,7 +258,7 @@ def reduce_event(state: RuntimeState, event: dict) -> RuntimeState:
             turn.completion_block_count = 0
     known_noop_events = {
         "UserMessageRecorded", "AssistantToolCallsRecorded", "ToolMessageRecorded",
-        "AssistantMessageRecorded", "CompletionRequested",
+        "AssistantMessageRecorded", "CompletionRequested", "ContextCompacted",
     }
     if kind not in known_noop_events and not (
         kind in {"TurnStarted", "TurnIterationAdvanced", "CompletionBlocked", "TurnCompleted", "TurnInterrupted", "TurnFailed"}

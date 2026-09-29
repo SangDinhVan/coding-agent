@@ -113,6 +113,19 @@ class ReducerTests(unittest.TestCase):
         blockers = completion_blockers(replay(events), "t1")
         self.assertEqual(blockers[0].code, "missing_required_plan")
 
+    def test_context_compacted_is_a_runtime_noop(self):
+        state = replay([event(1, "ContextCompacted", "context", "s", {
+            "previous_covers_through_seq": 0,
+            "covers_through_seq": 10,
+            "input_tokens_before": 100,
+            "input_tokens_after": 40,
+            "summary_input_tokens": 60,
+            "duration_ms": 12,
+        })])
+        self.assertEqual(state.turns, {})
+        self.assertEqual(state.executions, {})
+        self.assertIsNone(state.active_turn_id)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -10,8 +10,9 @@ from typing import Optional
 from uuid import uuid4
 
 from agent.state import WorkspaceState
+from context.checkpoint import CheckpointCorruptionError, CheckpointStore
 from context.compactor import Compactor
-from core.paths import project_memory_path, workspace_identity as compute_workspace_identity
+from core.paths import checkpoint_path, project_memory_path, workspace_identity as compute_workspace_identity
 from memory.event_store import EventStore
 from memory.manager import MemoryManager
 from model import llm
@@ -60,8 +61,12 @@ class StreamedToolCall:
 SYSTEM_PROMPT_TEMPLATE = """\
 Bạn là 1 coding agent cá nhân, có quyền đọc/ghi/sửa file và chạy lệnh shell thông qua các tool được cung cấp.
 
---- PROJECT.md (facts về project) ---
+--- PROJECT.md (advisory facts về project) ---
 {project_md}
+
+Memory is advisory. Current system/user instructions, repository code and
+configuration, tests, session journal, and runtime state take precedence over
+PROJECT.md whenever they conflict.
 
 --- Trạng thái runtime hiện tại ---
 {runtime_state}
@@ -91,6 +96,16 @@ class Agent:
         self.memory_manager = MemoryManager(
             project_memory_path(self.state_root, self.workspace_identity)
         )
+        self.checkpoint_store = CheckpointStore(
+            checkpoint_path(self.state_root, self.event_store.session_id)
+        )
+        try:
+            self.checkpoint = self.checkpoint_store.load(
+                self.event_store.session_id, self.event_store.last_seq
+            )
+        except CheckpointCorruptionError as error:
+            print(f"[context] ignoring invalid checkpoint: {error}", flush=True)
+            self.checkpoint = None
         self.compactor = Compactor(model=model)
         self.sandbox = sandbox
         self.tool_registry = tool_registry or ToolRegistry(sandbox)
@@ -184,9 +199,34 @@ class Agent:
         }
 
     def _build_context(self) -> list[dict]:
-        history = [message for message in self.event_store.to_messages() if message["role"] != "system"]
-        messages = [self._build_system_message()] + history
-        return self.compactor.compact(messages) if self.compactor.should_compact(messages) else messages
+        turn = self.runtime_state.turns.get(self.runtime_state.active_turn_id)
+        goal = turn.goal if turn is not None else (self.checkpoint.goal if self.checkpoint else "")
+        result = self.compactor.build_context(
+            system_message=self._build_system_message(),
+            message_records=self.event_store.message_records(),
+            checkpoint=self.checkpoint,
+            session_id=self.event_store.session_id,
+            goal=goal,
+        )
+        if result.compacted and result.checkpoint is not None:
+            previous_seq = self.checkpoint.covers_through_seq if self.checkpoint else 0
+            self.checkpoint_store.save(result.checkpoint)
+            self.checkpoint = result.checkpoint
+            self._event(
+                "ContextCompacted",
+                "context",
+                self.event_store.session_id,
+                {
+                    "previous_covers_through_seq": previous_seq,
+                    "covers_through_seq": result.checkpoint.covers_through_seq,
+                    "input_tokens_before": result.input_tokens_before,
+                    "input_tokens_after": result.input_tokens_after,
+                    "summary_input_tokens": result.summary_input_tokens,
+                    "duration_ms": result.duration_ms,
+                },
+                turn_id=self.runtime_state.active_turn_id,
+            )
+        return result.messages
 
     def _consume_stream(self, response, *, emit_text: bool = True):
         full_text = ""

@@ -4,6 +4,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agent.loop import Agent
+from context.checkpoint import CheckpointStore, CompactionCheckpoint
+from context.compactor import CompactionResult
+from core.paths import checkpoint_path
+from memory.event_store import EventStore
 from sandbox.models import WorkspaceMode
 from tools.base import ToolResult
 from tests.fakes import FakeTool, stream_text, stream_tool_call
@@ -18,6 +22,23 @@ class FakeRegistry:
 
     def get(self, name):
         return self.tool if self.tool is not None and name == self.tool.name else None
+
+
+def make_checkpoint(session_id: str, covers: int, max_seq: int | None = None):
+    return CompactionCheckpoint.from_dict({
+        "schema_version": 1,
+        "session_id": session_id,
+        "covers_through_seq": covers,
+        "created_at": "2026-09-29T10:00:00Z",
+        "goal": "goal",
+        "progress": ["old work"],
+        "decisions": [],
+        "constraints": [],
+        "blockers": [],
+        "remaining_work": ["continue"],
+        "critical_references": [],
+        "verification": [],
+    }, session_id=session_id, max_seq=max_seq if max_seq is not None else covers)
 
 
 class AgentLoopCharacterizationTests(unittest.TestCase):
@@ -266,3 +287,131 @@ class AgentFinalizationTests(unittest.TestCase):
         agent.discard()
         sandbox.destroy.assert_called_once_with("discard")
         sandbox.prepare_changes.assert_not_called()
+
+
+class DurableContextTests(unittest.TestCase):
+    def test_system_message_marks_project_memory_advisory_and_lower_priority(self):
+        with tempfile.TemporaryDirectory() as directory:
+            agent = Agent(str(Path(directory) / "session.jsonl"), workdir=directory)
+            self.addCleanup(agent.close)
+            content = agent._build_system_message()["content"].lower()
+            for phrase in ("advisory", "instructions", "repository", "tests", "journal", "runtime"):
+                self.assertIn(phrase, content)
+
+    def test_resume_context_is_checkpoint_plus_only_uncovered_messages(self):
+        with tempfile.TemporaryDirectory() as state, tempfile.TemporaryDirectory() as workspace:
+            events_path = Path(state) / "session.jsonl"
+            with EventStore(events_path) as store:
+                store.append("user", "old user")
+                store.append("assistant", "old assistant")
+                store.append("user", "new user")
+            saved = make_checkpoint("session", covers=2, max_seq=3)
+            CheckpointStore(checkpoint_path(state, "session")).save(saved)
+            agent = Agent(
+                str(events_path), workdir=workspace,
+                state_root=state, workspace_identity="workspace",
+            )
+            self.addCleanup(agent.close)
+            context = agent._build_context()
+            self.assertEqual(context[0]["role"], "system")
+            self.assertIn("advisory", context[0]["content"].lower())
+            self.assertEqual(context[1], saved.to_message())
+            self.assertEqual(context[2:], [{"role": "user", "content": "new user"}])
+
+    def test_below_budget_context_creates_no_checkpoint_or_event(self):
+        with tempfile.TemporaryDirectory() as state, tempfile.TemporaryDirectory() as workspace:
+            events_path = Path(state) / "session.jsonl"
+            agent = Agent(
+                str(events_path), workdir=workspace,
+                state_root=state, workspace_identity="workspace",
+            )
+            self.addCleanup(agent.close)
+            agent.event_store.append("user", "small")
+            agent._build_context()
+            self.assertFalse(checkpoint_path(state, "session").exists())
+            self.assertFalse(any(
+                event.get("event_type") == "ContextCompacted"
+                for event in agent.event_store.read_all()
+            ))
+
+    def test_successful_compaction_is_saved_and_measured_before_main_model_call(self):
+        with tempfile.TemporaryDirectory() as state, tempfile.TemporaryDirectory() as workspace:
+            events_path = Path(state) / "session.jsonl"
+            agent = Agent(
+                str(events_path), workdir=workspace,
+                state_root=state, workspace_identity="workspace",
+                tool_registry=FakeRegistry(),
+            )
+            self.addCleanup(agent.close)
+            compacted = make_checkpoint("session", covers=1, max_seq=1)
+            result = CompactionResult(
+                messages=[{"role": "system", "content": "sys"}, {"role": "user", "content": "goal"}],
+                checkpoint=compacted,
+                compacted=True,
+                input_tokens_before=100,
+                input_tokens_after=40,
+                summary_input_tokens=60,
+                duration_ms=12,
+            )
+            agent.compactor = unittest.mock.MagicMock()
+            agent.compactor.build_context.return_value = result
+
+            def complete_after_checkpoint(**kwargs):
+                self.assertTrue(checkpoint_path(state, "session").exists())
+                self.assertTrue(any(
+                    event.get("event_type") == "ContextCompacted"
+                    for event in agent.event_store.read_all()
+                ))
+                return stream_text("done")
+
+            with patch("agent.loop.llm.complete", side_effect=complete_after_checkpoint):
+                self.assertEqual(agent.run_turn("goal"), "done")
+
+            compact_event = next(
+                event for event in agent.event_store.read_all()
+                if event.get("event_type") == "ContextCompacted"
+            )
+            self.assertEqual(compact_event["payload"], {
+                "previous_covers_through_seq": 0,
+                "covers_through_seq": 1,
+                "input_tokens_before": 100,
+                "input_tokens_after": 40,
+                "summary_input_tokens": 60,
+                "duration_ms": 12,
+            })
+
+    def test_invalid_checkpoint_is_ignored_without_rewriting_journal(self):
+        with tempfile.TemporaryDirectory() as state, tempfile.TemporaryDirectory() as workspace:
+            events_path = Path(state) / "session.jsonl"
+            with EventStore(events_path) as store:
+                store.append("user", "goal")
+            before = events_path.read_bytes()
+            path = checkpoint_path(state, "session")
+            path.parent.mkdir(parents=True)
+            path.write_text("{bad", encoding="utf-8")
+            with patch("builtins.print") as output:
+                agent = Agent(
+                    str(events_path), workdir=workspace,
+                    state_root=state, workspace_identity="workspace",
+                )
+            self.addCleanup(agent.close)
+            self.assertIsNone(agent.checkpoint)
+            self.assertEqual(events_path.read_bytes(), before)
+            self.assertEqual(agent._build_context()[-1], {"role": "user", "content": "goal"})
+            self.assertTrue(any("checkpoint" in str(call).lower() for call in output.call_args_list))
+
+    def test_session_mismatched_checkpoint_is_ignored(self):
+        with tempfile.TemporaryDirectory() as state, tempfile.TemporaryDirectory() as workspace:
+            events_path = Path(state) / "session.jsonl"
+            with EventStore(events_path) as store:
+                store.append("user", "goal")
+            CheckpointStore(checkpoint_path(state, "session")).save(
+                make_checkpoint("other", covers=1, max_seq=1)
+            )
+            with patch("builtins.print"):
+                agent = Agent(
+                    str(events_path), workdir=workspace,
+                    state_root=state, workspace_identity="workspace",
+                )
+            self.addCleanup(agent.close)
+            self.assertIsNone(agent.checkpoint)
