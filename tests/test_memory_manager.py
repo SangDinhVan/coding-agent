@@ -1,5 +1,6 @@
 import stat
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -86,6 +87,62 @@ class MemoryManagerTests(unittest.TestCase):
                 with self.assertRaisesRegex(OSError, "replace failed"):
                     manager.remember("New fact")
             self.assertEqual(manager.project_md_path.read_bytes(), before)
+
+    def test_concurrent_mutations_do_not_lose_entries(self):
+        with tempfile.TemporaryDirectory() as directory:
+            first = self.manager(directory)
+            second = self.manager(directory)
+            first_read = threading.Event()
+            release_first = threading.Event()
+            second_entered = threading.Event()
+            second_done = threading.Event()
+            errors = []
+
+            first_entries = first.entries
+            second_entries = second.entries
+
+            def pause_after_first_read():
+                entries = first_entries()
+                first_read.set()
+                release_first.wait(2)
+                return entries
+
+            def mark_second_read():
+                second_entered.set()
+                return second_entries()
+
+            first.entries = pause_after_first_read
+            second.entries = mark_second_read
+
+            def remember(manager, fact, done=None):
+                try:
+                    manager.remember(fact)
+                except BaseException as error:
+                    errors.append(error)
+                finally:
+                    if done is not None:
+                        done.set()
+
+            first_thread = threading.Thread(target=remember, args=(first, "First fact"))
+            second_thread = threading.Thread(
+                target=remember, args=(second, "Second fact", second_done)
+            )
+            first_thread.start()
+            self.assertTrue(first_read.wait(2))
+            second_thread.start()
+            if second_entered.wait(0.5):
+                self.assertTrue(second_done.wait(2))
+            release_first.set()
+            first_thread.join(2)
+            second_thread.join(2)
+
+            self.assertFalse(first_thread.is_alive())
+            self.assertFalse(second_thread.is_alive())
+            self.assertEqual(errors, [])
+            self.assertEqual(
+                {entry.fact for entry in MemoryManager(first.project_md_path).entries()},
+                {"First fact", "Second fact"},
+            )
 
 
 if __name__ == "__main__":

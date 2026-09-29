@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import fcntl
 import os
 import re
 import tempfile
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
@@ -76,37 +78,50 @@ class MemoryManager:
 
     def remember(self, fact: str) -> tuple[MemoryEntry, bool]:
         normalized = self._normalize(fact)
-        entries = list(self.entries())
-        duplicate = next(
-            (entry for entry in entries if entry.fact.casefold() == normalized.casefold()),
-            None,
-        )
-        if duplicate is not None:
-            return duplicate, False
-        used_ids = {entry.memory_id for entry in entries}
-        memory_id = uuid4().hex[:8]
-        while memory_id in used_ids:
+        with self._mutation_lock():
+            entries = list(self.entries())
+            duplicate = next(
+                (entry for entry in entries if entry.fact.casefold() == normalized.casefold()),
+                None,
+            )
+            if duplicate is not None:
+                return duplicate, False
+            used_ids = {entry.memory_id for entry in entries}
             memory_id = uuid4().hex[:8]
-        entry = MemoryEntry(memory_id, normalized)
-        entries.append(entry)
-        self._write_entries(entries)
-        return entry, True
+            while memory_id in used_ids:
+                memory_id = uuid4().hex[:8]
+            entry = MemoryEntry(memory_id, normalized)
+            entries.append(entry)
+            self._write_entries(entries)
+            return entry, True
 
     def forget(self, query: str) -> MemoryEntry:
         normalized = self._normalize(query)
-        entries = self.entries()
-        matches = [
-            entry for entry in entries
-            if entry.memory_id == normalized.casefold()
-            or entry.fact.casefold() == normalized.casefold()
-        ]
-        if not matches:
-            raise ValueError("memory not found")
-        if len(matches) != 1:
-            raise ValueError("memory query is ambiguous")
-        removed = matches[0]
-        self._write_entries([entry for entry in entries if entry != removed])
-        return removed
+        with self._mutation_lock():
+            entries = self.entries()
+            matches = [
+                entry for entry in entries
+                if entry.memory_id == normalized.casefold()
+                or entry.fact.casefold() == normalized.casefold()
+            ]
+            if not matches:
+                raise ValueError("memory not found")
+            if len(matches) != 1:
+                raise ValueError("memory query is ambiguous")
+            removed = matches[0]
+            self._write_entries([entry for entry in entries if entry != removed])
+            return removed
+
+    @contextmanager
+    def _mutation_lock(self):
+        lock_path = self.project_md_path.with_name(f".{self.project_md_path.name}.lock")
+        with lock_path.open("a+", encoding="utf-8") as lock_file:
+            lock_path.chmod(0o600)
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
     @staticmethod
     def _normalize(value: str) -> str:
