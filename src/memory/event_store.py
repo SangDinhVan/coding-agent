@@ -258,6 +258,10 @@ class EventStore:
     def read_all(self) -> list[dict]:
         return list(self._iter_events())
 
+    @property
+    def last_seq(self) -> int:
+        return self._seq
+
     def _iter_events(self) -> Iterator[dict]:
         if not self.path.exists():
             return
@@ -301,18 +305,29 @@ class EventStore:
                 raise JournalCorruptionError(f"duplicate event ID at line {line}")
             event_ids.add(event["event_id"])
 
-    def to_messages(self) -> list[dict]:
-        messages = []
+    @staticmethod
+    def _project_message(event: dict) -> dict | None:
+        if "event_type" not in event:
+            payload = event
+        elif event["event_type"] in _MESSAGE_EVENT_TYPES:
+            payload = event["payload"]
+        else:
+            return None
+        message = {"role": payload["role"]}
+        for key in ("content", "tool_calls", "tool_call_id"):
+            if key in payload:
+                message[key] = payload[key]
+        return message
+
+    def message_records(self, after_seq: int = 0) -> list[tuple[int, dict]]:
+        records = []
         for event in self._iter_events():
-            if "event_type" not in event:
-                payload = event
-            elif event["event_type"] in _MESSAGE_EVENT_TYPES:
-                payload = event["payload"]
-            else:
+            if event["seq"] <= after_seq:
                 continue
-            message = {"role": payload["role"]}
-            for key in ("content", "tool_calls", "tool_call_id"):
-                if key in payload:
-                    message[key] = payload[key]
-            messages.append(message)
-        return messages
+            message = self._project_message(event)
+            if message is not None:
+                records.append((event["seq"], message))
+        return records
+
+    def to_messages(self) -> list[dict]:
+        return [message for _, message in self.message_records()]

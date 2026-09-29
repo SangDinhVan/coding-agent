@@ -42,6 +42,31 @@ class EventStoreTests(unittest.TestCase):
                 store.append_event("TurnStarted", "turn", "t1", {"goal": "x"}, turn_id="t1")
                 self.assertEqual(store.to_messages(), [])
 
+    def test_message_records_preserve_sequence_and_filter_runtime_events(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with EventStore(self.path(directory)) as store:
+                store.append_event("TurnStarted", "turn", "t1", {"goal": "x"}, turn_id="t1")
+                event = store.append("user", "goal", turn_id="t1")
+                self.assertEqual(store.message_records(after_seq=event["seq"] - 1), [
+                    (event["seq"], {"role": "user", "content": "goal"}),
+                ])
+                self.assertEqual(store.last_seq, event["seq"])
+
+    def test_legacy_message_records_keep_original_sequence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.path(directory)
+            path.write_text('{"seq":7,"ts":"old","role":"user","content":"legacy"}\n', encoding="utf-8")
+            with EventStore(path) as store:
+                self.assertEqual(store.message_records(), [
+                    (7, {"role": "user", "content": "legacy"}),
+                ])
+                self.assertEqual(store.last_seq, 7)
+
+    def test_empty_journal_has_zero_last_sequence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with EventStore(self.path(directory)) as store:
+                self.assertEqual(store.last_seq, 0)
+
     def test_legacy_role_records_still_project(self):
         with tempfile.TemporaryDirectory() as directory:
             path = self.path(directory)
