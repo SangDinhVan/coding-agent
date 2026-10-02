@@ -17,4 +17,5 @@ dist/
 
 # Local chat history
 memory/chats/
+.llm-traces/
 .superpowers/

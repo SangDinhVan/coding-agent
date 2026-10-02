@@ -9,6 +9,10 @@
 > Thiết kế lấy cảm hứng từ cách tách context, compaction và long-term memory
 > của Codex, nhưng chỉ giữ những phần cần thiết để có thể triển khai, kiểm thử
 > và sử dụng thực tế.
+>
+> Cập nhật hardening ngày **2026-10-02**: các phần cuối tài liệu ghi rõ những
+> guard implementation hiện đã có, các failure mode còn lại và invariant cần
+> bổ sung. Nội dung đề xuất không đồng nghĩa code hiện tại đã triển khai toàn bộ.
 
 ---
 
@@ -20,6 +24,22 @@ Kiến trúc mới cần giải quyết bốn vấn đề:
 2. Có thể đóng chương trình rồi resume đúng session cũ.
 3. Các session của cùng một project có thể dùng chung kiến thức bền vững.
 4. Project khác không đọc nhầm memory của nhau.
+
+Ngoài bốn mục tiêu chức năng trên, hệ thống phải giữ bốn ranh giới an toàn:
+
+```text
+Identity boundary
+= session và memory phải thuộc đúng project
+
+Trust boundary
+= checkpoint và project memory là dữ liệu tham khảo, không phải instruction
+
+Resource boundary
+= mọi request, kể cả request dùng để compact, đều phải có token budget hữu hạn
+
+Reality boundary
+= state đã lưu phải được reconcile với code và môi trường hiện tại
+```
 
 Thiết kế không cố lưu mọi thứ vào một file. Mỗi loại dữ liệu có vòng đời và
 độ tin cậy khác nhau nên được tách riêng.
@@ -245,6 +265,19 @@ Active context đề xuất:
 7. Current user message
 ```
 
+Danh sách trên mô tả thứ tự dữ liệu, không có nghĩa tất cả thành phần nên được
+gửi bằng cùng một provider role. Canonical instructions mới thuộc instruction
+channel có độ ưu tiên cao. Project memory và checkpoint phải được render như
+**untrusted/advisory data**, có delimiter rõ ràng và không được nâng thành luật
+chỉ vì chúng xuất hiện trong một system message.
+
+Invariant cần giữ:
+
+```text
+canonical instructions có thể điều khiển cách dùng memory
+memory không thể tự tạo instruction để ghi đè canonical instructions
+```
+
 Các assistant tool call và tool result tương ứng phải được giữ thành nhóm
 nguyên tử:
 
@@ -277,6 +310,20 @@ Kích hoạt auto compact khi:
 ```text
 estimated_input_tokens > available_input_budget
 ```
+
+Budget này phải áp dụng cho cả request chính và request tạo checkpoint. Không
+được giả định rằng request compact luôn nhỏ hơn request đang bị overflow:
+
+```text
+summary_prompt_tokens
++ reserved_summary_output_tokens
++ safety_margin_tokens
+<= compaction_model_context_window
+```
+
+Nếu prefix cần compact không vừa một request, hệ thống phải compact theo chunk
+hoặc dùng một fallback xác định trước; không gửi toàn bộ prefix rồi chờ provider
+trả lỗi context overflow.
 
 Ví dụ với context window 256k:
 
@@ -389,6 +436,23 @@ Nhờ đó, hệ thống không phải summary lại toàn bộ history ở mỗ
 Checkpoint không thay thế journal. Nếu checkpoint bị lỗi hoặc mất, nó có thể
 được tạo lại từ journal.
 
+Checkpoint cũng không phải bằng chứng rằng một hành động đã thực sự xảy ra.
+Trong MVP hiện tại, các field narrative vẫn do model sinh và schema validation
+chỉ kiểm tra kiểu dữ liệu. Hướng hardening là tách:
+
+```text
+Narrative do model tổng hợp
+= goal / progress / decisions / remaining_work
+
+Evidence do runtime suy ra từ journal
+= tool execution status / command / exit code / event seq / workspace fingerprint
+```
+
+Đặc biệt, `verification` không nên chỉ là câu model tự viết như "tests đã pass".
+Mỗi claim quan trọng cần trỏ tới event hoặc tool result thật. Constraint quan
+trọng nên giữ nguyên wording của user cùng source sequence để giảm telephone
+game qua nhiều lần compact.
+
 ---
 
 # 10. Project Memory
@@ -406,9 +470,34 @@ Project hiện đã có `workspace_identity`, vì vậy có thể dùng identity
 tách memory thay cho đường dẫn chung `projects/default/PROJECT.md`.
 
 Trong phiên bản hiện tại, identity được tạo từ đường dẫn thật, device và inode
-của workspace. Cách này đủ cho một agent chạy local, nhưng move hoặc clone
-repository có thể tạo identity mới. Đây là giới hạn chấp nhận được ở MVP; nếu
-cần đồng bộ nhiều máy, có thể bổ sung một project ID ổn định ở phase sau.
+của workspace. Cách này cung cấp isolation cơ bản nhưng không phải project ID
+ổn định:
+
+```text
+- move, clone hoặc tạo lại repo có thể sinh identity mới và mất liên kết memory;
+- Git worktree có thể làm memory bị phân mảnh;
+- bind mount, network filesystem hoặc Docker mount có thể đổi device/inode;
+- tái sử dụng cùng path và inode có rủi ro nhận nhầm identity cũ;
+- một monorepo có thể cần scope nhỏ hơn toàn workspace.
+```
+
+Quan trọng hơn, session journal hiện cũng phải được bind với project identity.
+Chỉ tách đường dẫn `PROJECT.md` là chưa đủ: resume một journal của project A
+trong workspace B sẽ trộn history A với code và memory B.
+
+Hướng hardening tối thiểu:
+
+```text
+1. Tạo project_id ổn định cho local repository.
+2. Persist project_id trong event khởi tạo session.
+3. Khi resume, so session.project_id với current.project_id.
+4. Mismatch thì fail closed; migrate/adopt phải là thao tác explicit.
+```
+
+Với Git, project ID có thể nằm trong Git common directory để move repo vẫn giữ
+ID và các worktree dùng chung ID, nhưng clone mới không tự động nhận chung
+memory. Hash remote URL hoặc file ID được commit đều có ambiguity, vì vậy không
+nên xem chúng là lời giải duy nhất cho mọi workflow.
 
 ## 10.1 Nội dung nên lưu
 
@@ -543,6 +632,12 @@ Compaction checkpoint
 Project memory
 ```
 
+Thứ tự này phải được phản ánh bằng cấu trúc request và validation trong code,
+không chỉ là một câu nhắc trong prompt. Nếu checkpoint hoặc `PROJECT.md` được
+nội suy trực tiếp thành provider `system` content thì chúng có quyền thực tế
+cao hơn mức "advisory" mà tài liệu mong muốn, đồng thời mở đường cho stale
+memory hoặc prompt injection trở thành instruction có độ ưu tiên cao.
+
 Ví dụ `PROJECT.md` nói repo dùng `npm`, nhưng repository hiện có
 `pnpm-lock.yaml` và CI chạy `pnpm`, agent phải tin trạng thái repository hiện
 tại.
@@ -587,12 +682,19 @@ User chọn session cũ
       ▼
 load session journal
       │
+      ▼
+validate session.project_id == current.project_id
+      │
       ├── replay runtime state
       │
       └── load latest checkpoint
                  │
                  ▼
       lấy events sau covers_through_seq
+                 │
+                 ▼
+      so workspace fingerprint hiện tại
+      với fingerprint lúc checkpoint
                  │
                  ▼
       load đúng project memory
@@ -606,6 +708,19 @@ load session journal
 
 Resume không phụ thuộc hoàn toàn vào checkpoint. Runtime lifecycle quan trọng
 vẫn được replay từ event journal.
+
+Replay chỉ khôi phục state đã ghi nhận, không tự khôi phục thế giới bên ngoài.
+Khi resume cần reconcile ít nhất các giá trị có sẵn hoặc lấy được rẻ:
+
+```text
+project_id
+git HEAD / branch / dirty-state digest
+sandbox hoặc container identity
+image/dependency fingerprint nếu có
+```
+
+Nếu fingerprint lệch, các claim như "đã sửa file X" hoặc "tests đã pass" phải
+được đánh dấu stale và revalidate trước khi dùng làm bằng chứng.
 
 ---
 
@@ -641,7 +756,17 @@ vượt available_input_budget?
 ```
 
 Nếu tạo checkpoint thất bại, journal vẫn không bị thay đổi. Hệ thống có thể
-retry hoặc giảm recent context theo một fallback policy rõ ràng.
+retry hoặc giảm recent context theo một fallback policy rõ ràng. Policy tối
+thiểu cần xác định trước, tránh compact lỗi ở mọi request:
+
+```text
+1. Không retry vô hạn cùng một cutoff.
+2. Ghi nhận compaction failure và nguyên nhân.
+3. Offload/truncate low-value tool output trước.
+4. Giữ current user message và atomic tool group đang hoạt động.
+5. Nếu vẫn không vừa, fail rõ ràng thay vì gửi provider request chắc chắn lỗi.
+6. Khi provider trả context_length_exceeded, compact và retry tối đa một lần.
+```
 
 ---
 
@@ -760,6 +885,29 @@ So sánh token input:
 - tool call và tool result có còn nguyên nhóm không.
 ```
 
+## 18.6 Fault-injection scenarios
+
+Phần lớn tiêu chí không cần đánh giá cảm tính. Có thể tạo scenario xác định
+trước và assert invariant:
+
+```text
+- compact lặp 3-5 lần rồi kiểm tra constraint gốc còn nguyên;
+- resume session trong sai workspace phải bị từ chối;
+- sửa Git HEAD hoặc file sau checkpoint phải làm verification thành stale;
+- compaction prefix lớn hơn model window phải được chia chunk hoặc fail rõ;
+- tool result chứa secret và output rất lớn không được ghi raw vào journal;
+- crash tạo JSONL tail dở phải repair được mà không mất record hoàn chỉnh;
+- thiếu một tool result không được tạo provider message sequence mồ côi;
+- schema cũ phải migrate hoặc fail closed với thông báo rõ ràng;
+- hai writer cùng session phải không thể cùng ghi;
+- memory chứa prompt injection không được trở thành instruction authority.
+```
+
+Các metric như stale-memory rate hoặc conflicting-memory rate phải định nghĩa
+rõ mẫu số, nguồn ground truth và ai gán nhãn. Human review chỉ nên dành cho
+semantic quality; các invariant về identity, evidence, atomicity và overflow
+nên được kiểm thử tự động.
+
 ---
 
 # 19. So sánh kiến trúc hiện tại và kiến trúc đề xuất
@@ -778,7 +926,62 @@ So sánh token input:
 
 ---
 
-# 20. Câu chốt
+# 20. Hardening status và failure modes
+
+## 20.1 Guard implementation hiện đã có
+
+Các cơ chế sau đã tồn tại trong implementation và không nên tiếp tục mô tả như
+phần hoàn toàn chưa xử lý:
+
+```text
+- journal có schema_version, sequence validation, fsync và single-writer lock;
+- trailing partial JSONL có repair primitive và tạo backup;
+- checkpoint validate session/sequence và persist bằng temp file + replace;
+- PROJECT.md mutation có lock và atomic replace;
+- curated memory có stable memory ID và exact-match forget;
+- một số tool tạo compact preview trước khi đưa output vào model context;
+- runtime có recovery flow cho tool execution dang dở.
+```
+
+Các primitive này giảm rủi ro storage-level nhưng chưa tự động đảm bảo toàn bộ
+invariant end-to-end.
+
+## 20.2 Failure modes còn lại
+
+| Failure domain | Rủi ro chính | Hardening tối thiểu |
+|---|---|---|
+| Project identity | Move/clone/worktree làm mất hoặc phân mảnh memory | Stable project ID + explicit migration |
+| Session binding | Resume journal của project khác | Persist và validate session project ID |
+| Trust/precedence | Advisory data được gửi như system instruction | Tách instruction khỏi untrusted context data |
+| Summary drift | Checkpoint cũ bị summary lại nhiều lần | Giữ verbatim constraints + provenance |
+| Verification | Model hallucinate tests đã pass | Derive evidence từ runtime events |
+| World drift | Code/environment đổi sau checkpoint | Workspace fingerprint + revalidation |
+| Compaction overflow | Summary request tự vượt context | Budget summary call + chunking |
+| Compaction failure | API/schema lỗi lặp lại mỗi request | Bounded retry + deterministic fallback |
+| Large tool output | Atomic group không vừa hoặc journal phình | Preview + content-addressed blob/offload |
+| Secret persistence | Secret nằm trong stdout/free-form content | Redact trước persistence, không chỉ theo key |
+| Replay scaling | Full journal được đọc/replay nhiều lần | Incremental reducer hoặc periodic runtime snapshot |
+| Schema evolution | Session cũ không đọc được sau đổi schema | Versioned reader/migration hoặc fail-closed policy |
+| Project memory growth | Load toàn bộ file gây nhiễu và tốn context | Size limit trước khi thêm retrieval |
+
+## 20.3 Hardening roadmap tối thiểu
+
+Không cần thêm vector database hoặc hệ distributed memory để xử lý các lỗi
+trên. Thứ tự ưu tiên ngắn nhất:
+
+```text
+1. Bind session với stable project ID.
+2. Tách advisory memory/checkpoint khỏi instruction authority.
+3. Ground verification và tool status bằng journal evidence.
+4. Budget/chunk compaction request và định nghĩa fallback hữu hạn.
+5. Reconcile workspace fingerprint khi resume.
+6. Offload large raw tool output và redact trước khi persist.
+7. Tối ưu replay khi benchmark cho thấy journal dài là bottleneck.
+```
+
+---
+
+# 21. Câu chốt
 
 ```text
 Journal giữ sự thật.
@@ -788,6 +991,15 @@ Checkpoint giữ khả năng tiếp tục một session dài.
 PROJECT.md giữ kiến thức bền vững của đúng một project.
 
 Canonical instructions giữ luật mà memory không được phép ghi đè.
+```
+
+Muốn bốn câu trên đúng trong implementation, hệ thống còn phải bảo vệ:
+
+```text
+Identity boundary: đang nhớ đúng project nào?
+Trust boundary: dữ liệu nào là authority, dữ liệu nào chỉ là advisory?
+Resource boundary: mọi request có chắc nằm trong budget không?
+Reality boundary: state đã lưu còn khớp code và môi trường hiện tại không?
 ```
 
 Phiên bản đầu nên ưu tiên:

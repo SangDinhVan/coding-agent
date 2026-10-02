@@ -12,7 +12,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
 WORKDIR /opt/coding-agent
-COPY pyproject.toml requirements.txt ./
+COPY pyproject.toml ./
 COPY src ./src
 RUN python -m pip install --no-cache-dir .
 COPY docker-entrypoint.sh /usr/local/bin/coding-agent-entrypoint

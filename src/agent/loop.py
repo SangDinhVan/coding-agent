@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import mimetypes
+import shutil
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Optional
@@ -90,6 +91,7 @@ class Agent:
         workspace_identity: str | None = None,
     ):
         self.model = model
+        self.workdir = Path(workdir).resolve()
         self.event_store = EventStore(path=events_path)
         self.state_root = Path(state_root) if state_root is not None else Path(events_path).parent
         self.workspace_identity = workspace_identity or compute_workspace_identity(workdir)
@@ -135,6 +137,7 @@ class Agent:
                 if status in {"running", "created", "error"}:
                     self.sandbox.stop("agent_close")
         finally:
+            llm.finish_trace()
             self.event_store.close()
 
     def prepare_changes(self):
@@ -228,6 +231,24 @@ class Agent:
             )
         return result.messages
 
+    def _run_with_trace(self, turn_id: str, action):
+        filename = f"{turn_id}.txt"
+        working_path = self.state_root / "traces" / self.event_store.session_id / filename
+        final_path = self.workdir / ".llm-traces" / self.event_store.session_id / filename
+        llm.start_trace(working_path)
+        try:
+            return action()
+        finally:
+            self._refresh()
+            if self.runtime_state.active_turn_id != turn_id:
+                saved_path = llm.finish_trace()
+                if saved_path is not None:
+                    final_path.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(saved_path, final_path)
+                    final_path.chmod(0o600)
+                    saved_path.unlink()
+                    print(f"[trace] saved: {final_path}", flush=True)
+
     def _consume_stream(self, response, *, emit_text: bool = True):
         full_text = ""
         calls = {}
@@ -291,7 +312,7 @@ class Agent:
             },
             turn_id=turn_id,
         )
-        return self._drive_turn(turn_id, max_iterations)
+        return self._run_with_trace(turn_id, lambda: self._drive_turn(turn_id, max_iterations))
 
     def pending_runtime_actions(self):
         return pending_runtime_actions(self.runtime_state)
@@ -350,6 +371,11 @@ class Agent:
             raise RuntimeError("No active turn to resume")
         if self.pending_runtime_actions():
             raise RuntimeError("Resolve pending approval or recovery before resuming")
+        return self._run_with_trace(
+            turn_id, lambda: self._resume_active_turn(turn_id, max_iterations)
+        )
+
+    def _resume_active_turn(self, turn_id: str, max_iterations: int) -> str:
         if not self._drain_pending_executions(turn_id):
             return ""
         final_events = [

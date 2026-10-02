@@ -62,6 +62,27 @@ class AgentLoopCharacterizationTests(unittest.TestCase):
             self.assertEqual(agent.turn_state.status.value, "completed")
             self.assertEqual([m["role"] for m in agent.event_store.to_messages()], ["user", "assistant"])
 
+    def test_completed_turn_saves_llm_trace_and_prints_its_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            agent = self.agent(directory)
+            client = unittest.mock.Mock()
+
+            def respond(**kwargs):
+                self.assertFalse((Path(directory) / ".llm-traces").exists())
+                return iter(stream_text("done"))
+
+            client.chat.completions.create.side_effect = respond
+
+            with patch("model.llm.OpenAI", return_value=client), patch("builtins.print") as output:
+                self.assertEqual(agent.run_turn("trace this prompt"), "done")
+
+            traces = list((Path(directory) / ".llm-traces" / "events").glob("*.txt"))
+            self.assertEqual(len(traces), 1)
+            trace = traces[0].read_text(encoding="utf-8")
+            self.assertIn("lần gọi thứ: 1", trace)
+            self.assertIn('"content": "trace this prompt"', trace)
+            self.assertTrue(any(str(traces[0]) in str(call) for call in output.call_args_list))
+
     def test_project_memory_is_isolated_by_workspace_identity(self):
         with tempfile.TemporaryDirectory() as state, tempfile.TemporaryDirectory() as workspace:
             first = Agent(
