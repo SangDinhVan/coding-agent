@@ -33,7 +33,7 @@ class _SandboxFileTool(BaseTool):
 class ReadTool(_SandboxFileTool):
     replay_policy = ReplayPolicy.REPLAY_SAFE
     name = "read"
-    description = "Đọc UTF-8 file trong isolated sandbox workspace. Chỉ nhận path tương đối."
+    description = "Read a UTF-8 file in the isolated sandbox workspace. Only relative paths are accepted."
     parameters = {"type": "object", "properties": {"path": {"type": "string", "description": "Workspace-relative path."}}, "required": ["path"]}
 
     def execute(self, path: str, **kwargs):
@@ -51,7 +51,7 @@ class ReadTool(_SandboxFileTool):
 class WriteTool(_SandboxFileTool):
     replay_policy = ReplayPolicy.RECONCILABLE
     name = "write"
-    description = "Ghi đè hoặc tạo UTF-8 file trong isolated sandbox workspace."
+    description = "Overwrite or create a UTF-8 file in the isolated sandbox workspace."
     parameters = {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}
 
     def recovery_metadata(self, path: str, content: str, **kwargs):
@@ -67,7 +67,7 @@ class WriteTool(_SandboxFileTool):
 class EditTool(_SandboxFileTool):
     replay_policy = ReplayPolicy.RECONCILABLE
     name = "edit"
-    description = "Thay unique old_string trong UTF-8 file thuộc isolated sandbox workspace."
+    description = "Replace a unique old_string in a UTF-8 file in the isolated sandbox workspace."
     parameters = {"type": "object", "properties": {"path": {"type": "string"}, "old_string": {"type": "string"}, "new_string": {"type": "string"}}, "required": ["path", "old_string", "new_string"]}
 
     def recovery_metadata(self, path: str, old_string: str, new_string: str, **kwargs):

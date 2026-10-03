@@ -142,7 +142,7 @@ class AgentLoopCharacterizationTests(unittest.TestCase):
             agent = self.agent(directory)
             prompt = agent._build_system_message()["content"]
 
-            self.assertIn("Tác vụ đơn giản", prompt)
+            self.assertIn("Do not create a plan for simple tasks", prompt)
             self.assertIn("complete_step/fail_step", prompt)
             self.assertIn("exec_1", prompt)
             self.assertIn("structural", prompt)

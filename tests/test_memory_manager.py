@@ -45,7 +45,7 @@ class MemoryManagerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "nested" / "PROJECT.md"
             manager = MemoryManager(path)
-            original = manager.read().replace("(chưa có dữ liệu)", "Custom overview", 1)
+            original = manager.read().replace("(no data yet)", "Custom overview", 1)
             path.write_text(original, encoding="utf-8")
             manager.remember("Repository uses pytest.")
             self.assertIn("Custom overview", manager.read())

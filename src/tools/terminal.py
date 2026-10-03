@@ -13,7 +13,7 @@ class BashTool(BaseTool):
 
     def __init__(self, sandbox=None):
         self.sandbox = sandbox
-        self.description = f"Chạy shell trong isolated offline sandbox; timeout mặc định {DEFAULT_TIMEOUT_SECONDS}s."
+        self.description = f"Run shell commands in the isolated offline sandbox; default timeout is {DEFAULT_TIMEOUT_SECONDS}s."
         self.parameters = {
             "type": "object",
             "properties": {

@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bún Bò Huế Mệ Dung</title>
+  <meta name="description" content="Bún bò Huế đậm đà, thơm ngon giao tận nơi.">
+  <style>
+    :root{--red:#ad2d19;--dark:#2d211d;--cream:#fff8ef;--gold:#e59d36;--muted:#74645d;--white:#fff}
+    *{box-sizing:border-box;margin:0;padding:0}
+    html{scroll-behavior:smooth}
+    body{font-family:Arial,Helvetica,sans-serif;color:var(--dark);background:var(--cream);line-height:1.6}
+    header{position:sticky;top:0;z-index:5;background:rgba(255,248,239,.95);border-bottom:1px solid #f0dec9;backdrop-filter:blur(8px)}
+    .nav{max-width:1120px;margin:auto;height:72px;padding:0 22px;display:flex;align-items:center;justify-content:space-between}
+    .logo{font-weight:900;font-size:20px;color:var(--red);display:flex;align-items:center;gap:9px}.logo span{font-size:28px}
+    nav{display:flex;gap:28px}nav a{color:var(--dark);text-decoration:none;font-weight:700;font-size:14px}nav a:hover{color:var(--red)}
+    .cart-button{border:0;background:var(--red);color:white;padding:11px 17px;border-radius:24px;font-weight:bold;cursor:pointer}
+    .hero{max-width:1120px;margin:auto;padding:75px 22px 85px;display:grid;grid-template-columns:1fr 1fr;align-items:center;gap:42px}
+    .eyebrow{color:var(--red);font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:2px;margin-bottom:14px}
+    h1{font-family:Georgia,serif;font-size:clamp(42px,6vw,72px);line-height:1.04;margin-bottom:20px;color:#35211b}.hero h1 em{font-style:normal;color:var(--red)}
+    .hero p{max-width:480px;color:var(--muted);font-size:17px;margin-bottom:28px}.primary{display:inline-block;text-decoration:none;background:var(--red);color:#fff;padding:14px 22px;border-radius:8px;font-weight:800;box-shadow:0 8px 18px #ad2d1930}.primary:hover{background:#8e2313}
+    .hero-art{min-height:355px;border-radius:50% 50% 10px 10px;background:radial-gradient(circle at 50% 48%,#f4b342 0 18%,transparent 19%),radial-gradient(ellipse at center,#b93b1d 0 38%,#6b2115 39% 47%,transparent 48%),linear-gradient(145deg,#f8d9a2,#e58f30);display:flex;align-items:center;justify-content:center;position:relative;box-shadow:inset 0 -18px 30px #7b291a40,0 20px 40px #77251225}.hero-art:after{content:'🌶️  🥬  🥩';position:absolute;bottom:24px;letter-spacing:12px;font-size:25px}.badge{position:absolute;right:5%;top:4%;background:#fff;border-radius:50%;width:95px;height:95px;display:grid;place-items:center;text-align:center;color:var(--red);font-weight:900;font-size:13px;transform:rotate(10deg);box-shadow:0 6px 18px #0002}
+    section{padding:72px 22px}.section-inner{max-width:1120px;margin:auto}.section-heading{text-align:center;margin-bottom:38px}.section-heading h2{font:700 38px Georgia,serif;margin-bottom:8px}.section-heading p{color:var(--muted)}
+    .menu{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}.card{background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 8px 25px #5424150d;border:1px solid #f1dfca}.food-img{height:180px;display:grid;place-items:center;font-size:76px;background:linear-gradient(135deg,#f9d99f,#f0a33d)}.food-img.two{background:linear-gradient(135deg,#f8c9a5,#bc3b20)}.food-img.three{background:linear-gradient(135deg,#b7d18c,#5d873d)}.card-body{padding:20px}.card h3{font-size:19px;margin-bottom:5px}.card p{font-size:14px;color:var(--muted);min-height:45px}.price-row{display:flex;align-items:center;justify-content:space-between;margin-top:16px}.price{color:var(--red);font-weight:900;font-size:18px}.add{border:0;background:#fff0e4;color:var(--red);font-size:21px;width:37px;height:37px;border-radius:50%;cursor:pointer;font-weight:bold}.add:hover{background:var(--red);color:#fff}
+    .story{background:#3a211b;color:#fff}.story-grid{max-width:900px;margin:auto;display:grid;grid-template-columns:1fr 1fr;gap:55px;align-items:center}.story h2{font:700 37px Georgia,serif;margin-bottom:15px}.story p{color:#ead7c8}.features{display:grid;grid-template-columns:1fr 1fr;gap:24px}.feature strong{display:block;color:#f1b34b;margin-bottom:4px}.feature span{font-size:14px;color:#d8bca9}
+    .contact{display:grid;grid-template-columns:1fr 1fr;gap:50px;align-items:start}.contact h2{font:700 36px Georgia,serif;margin-bottom:12px}.contact p{color:var(--muted)}.info{margin-top:22px}.info div{margin:12px 0}.info b{display:block}.order-box{background:#fff;padding:25px;border-radius:14px;box-shadow:0 8px 25px #54241512}.order-box h3{margin-bottom:15px}.order-box input,.order-box textarea{width:100%;border:1px solid #e7d4c2;border-radius:7px;padding:12px;margin-bottom:12px;font:inherit;background:#fffdfb}.order-box textarea{height:82px;resize:vertical}.order-box button{width:100%;border:0;cursor:pointer;font:inherit;font-weight:bold}
+    footer{background:#281713;color:#d8bca9;text-align:center;padding:25px;font-size:14px}
+    .toast{position:fixed;bottom:25px;right:25px;background:#2d211d;color:#fff;padding:14px 20px;border-radius:8px;transform:translateY(100px);transition:.3s;z-index:10}.toast.show{transform:translateY(0)}
+    @media(max-width:760px){nav{display:none}.hero{grid-template-columns:1fr;padding-top:48px}.hero-art{min-height:270px}.menu{grid-template-columns:1fr}.story-grid,.contact{grid-template-columns:1fr;gap:28px}.features{margin-top:10px}section{padding:55px 18px}.nav{padding:0 18px}}
+  </style>
+</head>
+<body>
+  <header><div class="nav"><a class="logo" href="#top"><span>🍜</span> MỆ DUNG</a><nav><a href="#menu">Thực đơn</a><a href="#story">Câu chuyện</a><a href="#contact">Liên hệ</a></nav><button class="cart-button" onclick="showToast('Giỏ hàng của bạn đang có '+cart+' món')">🛒 Giỏ hàng (<span id="cart">0</span>)</button></div></header>
+  <main id="top">
+    <section class="hero"><div><div class="eyebrow">Hương vị Huế nguyên bản</div><h1>Một tô bún bò,<br><em>trọn vị yêu thương.</em></h1><p>Nước dùng ninh 12 giờ, sả thơm nồng và những lát thịt bò mềm ngon — công thức gia truyền từ căn bếp nhỏ xứ Huế.</p><a class="primary" href="#menu">Xem thực đơn &nbsp;→</a></div><div class="hero-art"><div class="badge">NGON<br>TỪ TÂM<br>♥</div></div></section>
+    <section id="menu"><div class="section-inner"><div class="section-heading"><div class="eyebrow">Món ngon mỗi ngày</div><h2>Thực đơn của Mệ</h2><p>Chọn món yêu thích, chúng tôi chuẩn bị ngay!</p></div><div class="menu">
+      <article class="card"><div class="food-img">🍜</div><div class="card-body"><h3>Bún bò Huế đặc biệt</h3><p>Đầy đặn giò heo, chả cua, bò tái và rau sống.</p><div class="price-row"><span class="price">65.000đ</span><button class="add" onclick="addCart('Bún bò Huế đặc biệt')">+</button></div></div></article>
+      <article class="card"><div class="food-img two">🍲</div><div class="card-body"><h3>Bún bò giò heo</h3><p>Nước lèo đậm đà cùng khoanh giò heo béo mềm.</p><div class="price-row"><span class="price">55.000đ</span><button class="add" onclick="addCart('Bún bò giò heo')">+</button></div></div></article>
+      <article class="card"><div class="food-img three">🥗</div><div class="card-body"><h3>Rau & chả cua thêm</h3><p>Ăn kèm tươi ngon, hoàn hảo cho tô bún của bạn.</p><div class="price-row"><span class="price">25.000đ</span><button class="add" onclick="addCart('Rau & chả cua thêm')">+</button></div></div></article>
+    </div></div></section>
+    <section class="story" id="story"><div class="story-grid"><div><div class="eyebrow" style="color:#f1b34b">Từ năm 1998</div><h2>Nấu bằng ký ức,<br>trao bằng yêu thương.</h2><p>Mệ Dung bắt đầu bán bún bò từ một gánh hàng rong nhỏ. Qua bao năm, hương vị vẫn được giữ nguyên: nước dùng trong, vị ruốc Huế vừa vặn và nguyên liệu chọn mỗi sáng.</p></div><div class="features"><div class="feature"><strong>12 giờ</strong><span>Ninh nước dùng mỗi ngày</span></div><div class="feature"><strong>100%</strong><span>Nguyên liệu tươi sạch</span></div><div class="feature"><strong>25 phút</strong><span>Giao hàng tận nơi</span></div><div class="feature"><strong>4.9/5</strong><span>Đánh giá khách hàng</span></div></div></div></section>
+    <section id="contact"><div class="section-inner contact"><div><div class="eyebrow">Đặt món ngay</div><h2>Bún ngon đến tận cửa</h2><p>Để lại thông tin, Mệ sẽ gọi lại xác nhận đơn hàng trong ít phút.</p><div class="info"><div>📍 <b>Địa chỉ</b> 24 Nguyễn Trãi, TP. Huế</div><div>☎️ <b>Hotline</b> 0901 234 567</div><div>⏰ <b>Giờ mở cửa</b> 06:00 – 21:00 mỗi ngày</div></div></div><form class="order-box" onsubmit="submitOrder(event)"><h3>Thông tin giao hàng</h3><input id="name" required placeholder="Tên của bạn"><input required type="tel" placeholder="Số điện thoại"><textarea required placeholder="Địa chỉ giao hàng / ghi chú"></textarea><button class="primary" type="submit">Gửi đơn đặt món</button></form></div></section>
+  </main>
+  <footer>© 2024 Bún Bò Huế Mệ Dung · Nấu từ tâm, ngon từ vị</footer><div class="toast" id="toast"></div>
+  <script>let cart=0;function addCart(name){cart++;document.getElementById('cart').textContent=cart;showToast('Đã thêm '+name+' vào giỏ hàng!')}function showToast(message){const t=document.getElementById('toast');t.textContent=message;t.classList.add('show');clearTimeout(window.timer);window.timer=setTimeout(()=>t.classList.remove('show'),2600)}function submitOrder(e){e.preventDefault();showToast('Cảm ơn '+document.getElementById('name').value+'! Mệ sẽ gọi xác nhận đơn ngay.');e.target.reset()}</script>
+</body>
+</html>

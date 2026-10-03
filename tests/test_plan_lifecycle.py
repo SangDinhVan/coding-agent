@@ -88,7 +88,7 @@ class PlanTestCase(unittest.TestCase):
     @staticmethod
     def state_frame(messages):
         content = messages[0]["content"]
-        payload = content.split("--- Trạng thái runtime hiện tại ---\n", 1)[1]
+        payload = content.split("--- Current runtime state ---\n", 1)[1]
         payload = payload.split("\n\n--- Workspace ---", 1)[0]
         return json.loads(payload)
 

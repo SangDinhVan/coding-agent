@@ -15,26 +15,26 @@ from uuid import uuid4
 PROJECT_MD_TEMPLATE = """# PROJECT.md
 
 ## Overview
-(chưa có dữ liệu)
+(no data yet)
 
 ## Architecture
-(chưa có dữ liệu)
+(no data yet)
 
 ## Important Decisions
-(chưa có dữ liệu)
+(no data yet)
 
 ## Hard Constraints
-(chưa có dữ liệu)
+(no data yet)
 
 ## Coding Conventions
-(chưa có dữ liệu)
+(no data yet)
 
 ## Known Problems
-(chưa có dữ liệu)
+(no data yet)
 
 ## Failed Approaches
-(chưa có dữ liệu — mục này BẮT BUỘC giữ lại mọi giải pháp đã thử mà thất bại,
-để agent không lặp lại sai lầm cũ)
+(no data yet - this section MUST retain all attempted solutions that failed
+so the agent does not repeat past mistakes)
 
 ## Curated Memories
 

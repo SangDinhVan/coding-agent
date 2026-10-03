@@ -26,21 +26,21 @@ NARRATIVE_FIELDS = {
 LARGE_ARGUMENT_BYTES = 1_000
 
 SUMMARY_PROMPT_TEMPLATE = """\
-Bạn đang tạo checkpoint bàn giao có cấu trúc cho một coding agent.
-Hãy hợp nhất checkpoint trước đó (nếu có) với các message journal mới bên dưới.
-Chỉ trả JSON có đúng các key: goal, progress, decisions, constraints, blockers,
-remaining_work, critical_references, verification. goal là string; các field còn
-lại là array of strings. Không thêm markdown hoặc text ngoài JSON.
+Create a structured handoff checkpoint for a coding agent.
+Merge the previous checkpoint (if any) with the new journal messages below.
+Return only JSON with exactly these keys: goal, progress, decisions, constraints,
+blockers, remaining_work, critical_references, verification. goal must be a string;
+all other fields must be arrays of strings. Do not add markdown or text outside JSON.
 
---- Goal hiện tại ---
+--- Current goal ---
 {goal}
 
---- Checkpoint trước đó ---
+--- Previous checkpoint ---
 {previous_checkpoint}
 
---- Message journal mới cần compact ---
+--- New journal messages to compact ---
 {conversation}
---- Hết dữ liệu ---
+--- End of data ---
 """
 
 
