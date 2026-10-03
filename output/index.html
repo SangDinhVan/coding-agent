@@ -1,192 +1,51 @@
 <!DOCTYPE html>
 <html lang="vi">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Gà Ta Farm — Gà tươi ngon giao tận nhà</title>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Thé Mộc — Trà sữa thủ công</title>
 <style>
-  :root{
-    --bg:#fffaf3; --card:#fff; --ink:#3b2f2f; --muted:#8a7a6c;
-    --brand:#d9531e; --brand-dark:#b13d10; --accent:#f6a53c;
-    --ok:#2e8b57; --line:#f0e3d3;
-  }
-  *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:'Segoe UI',system-ui,Arial,sans-serif;background:var(--bg);color:var(--ink);line-height:1.55}
-  header{position:sticky;top:0;z-index:10;background:#fffef9ee;border-bottom:1px solid var(--line);backdrop-filter:blur(6px)}
-  .nav{max-width:1080px;margin:auto;display:flex;align-items:center;gap:14px;padding:12px 16px}
-  .logo{display:flex;align-items:center;gap:8px;font-weight:700;font-size:1.15rem}
-  .logo .chick{font-size:1.6rem}
-  .nav a{color:var(--ink);text-decoration:none;margin-left:auto}
-  .nav a:not(.cart-btn){margin-left:0;margin-right:14px;opacity:.85}
-  .cart-btn{background:var(--brand);color:#fff;border:none;border-radius:999px;padding:8px 16px;font-size:.95rem;cursor:pointer;position:relative}
-  .cart-btn .badge{position:absolute;top:-7px;right:-4px;background:var(--accent);color:#3b2f2f;font-weight:700;font-size:.75rem;border-radius:999px;padding:2px 7px}
-  .hero{max-width:1080px;margin:auto;padding:48px 16px 32px;display:grid;grid-template-columns:1.2fr .8fr;gap:24px;align-items:center}
-  .hero h1{font-size:2.4rem;line-height:1.2;margin-bottom:12px}
-  .hero h1 em{color:var(--brand);font-style:normal}
-  .hero p{color:var(--muted);margin-bottom:20px;max-width:46ch}
-  .btn{display:inline-block;background:var(--brand);color:#fff;border:none;border-radius:10px;padding:12px 22px;font-size:1rem;cursor:pointer;text-decoration:none}
-  .btn:hover{background:var(--brand-dark)}
-  .hero-emoji{font-size:7rem;text-align:center;filter:drop-shadow(0 8px 12px #0002)}
-  section{max-width:1080px;margin:auto;padding:24px 16px}
-  h2{font-size:1.6rem;margin-bottom:16px}
-  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:18px}
-  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden;display:flex;flex-direction:column;transition:transform .15s, box-shadow .15s}
-  .card:hover{transform:translateY(-3px);box-shadow:0 8px 18px #0001}
-  .thumb{height:130px;display:flex;align-items:center;justify-content:center;font-size:4rem;background:linear-gradient(135deg,#fff3e0,#ffe0c2)}
-  .card .body{padding:14px;flex:1;display:flex;flex-direction:column;gap:6px}
-  .card h3{font-size:1.05rem}
-  .desc{color:var(--muted);font-size:.9rem;flex:1}
-  .row{display:flex;align-items:center;justify-content:space-between;margin-top:8px}
-  .price{font-weight:700;color:var(--brand);font-size:1.05rem}
-  .add{background:var(--accent);border:none;border-radius:8px;padding:8px 14px;cursor:pointer;font-size:.9rem;font-weight:600}
-  .add:hover{background:var(--brand);color:#fff}
-  .tag{position:absolute;font-size:.72rem;background:var(--ok);color:#fff;border-radius:6px;padding:2px 8px}
-  .thumb{position:relative}
-  #cart-panel{position:fixed;top:0;right:-380px;width:360px;max-width:92vw;height:100vh;background:#fffef9;box-shadow:-6px 0 20px #0002;transition:right .25s;z-index:20;padding:18px;overflow:auto}
-  #cart-panel.open{right:0}
-  #cart-panel h2{margin-bottom:12px}
-  .item{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:10px 0;border-bottom:1px dashed var(--line)}
-  .item .nm{font-size:.95rem;flex:1}
-  .qty{display:flex;align-items:center;gap:6px}
-  .qty button{width:26px;height:26px;border:1px solid var(--line);background:#fff;border-radius:6px;cursor:pointer}
-  .total{display:flex;justify-content:space-between;font-weight:700;padding:14px 0}
-  .cart-panel .btn{width:100%;margin-top:8px}
-  .close-x{float:right;border:none;background:none;font-size:1.3rem;cursor:pointer}
-  form.order{background:#fff;border:1px solid var(--line);border-radius:14px;padding:18px;max-width:560px}
-  form.order label{display:block;font-size:.9rem;margin:10px 0 4px}
-  form.order input,form.order textarea{width:100%;padding:9px;border:1px solid var(--line);border-radius:8px;font-family:inherit}
-  .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;padding:10px 18px;border-radius:999px;opacity:0;transition:opacity .25s;pointer-events:none}
-  .toast.show{opacity:1}
-  footer{border-top:1px solid var(--line);margin-top:24px;padding:24px 16px;text-align:center;color:var(--muted);font-size:.9rem}
-  @media(max-width:760px){.hero{grid-template-columns:1fr;text-align:center}.hero p{margin:auto}.hero .btn{margin:0 auto}}
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@600;700&display=swap');
+:root{--ink:#17241f;--muted:#72807a;--green:#294d3b;--sage:#dfe9d7;--cream:#f8f6ef;--orange:#e57b45;--line:#e8e8df;--white:#fff;}
+*{box-sizing:border-box} body{margin:0;color:var(--ink);background:var(--cream);font-family:'DM Sans',sans-serif;font-size:15px} a{text-decoration:none;color:inherit} button{font:inherit;border:0;cursor:pointer}.container{max-width:1180px;margin:auto;padding:0 28px}
+.topbar{background:var(--green);color:#fff;text-align:center;font-size:12px;padding:10px;letter-spacing:.04em}.topbar span{color:#f6c39c}.nav{height:76px;display:flex;align-items:center;justify-content:space-between;background:var(--cream)}.brand{font-family:'Playfair Display',serif;font-size:25px;font-weight:700;color:var(--green);letter-spacing:-.04em}.brand small{font-family:'DM Sans';font-size:10px;display:block;letter-spacing:.22em;color:var(--orange);font-weight:700;text-transform:uppercase;margin-top:-2px}.links{display:flex;gap:30px;color:#54625b;font-size:13px}.links a:first-child{color:var(--green);font-weight:700}.nav-actions{display:flex;align-items:center;gap:17px}.search{border-bottom:1px solid #bfc8c0;padding:5px 0;color:var(--muted);font-size:12px}.search input{border:0;background:none;outline:0;width:100px;font:inherit}.bag{position:relative;color:var(--green);font-size:20px}.badge{position:absolute;right:-8px;top:-8px;background:var(--orange);color:#fff;border-radius:50%;font-size:10px;width:17px;height:17px;text-align:center;padding-top:2px}
+.hero{background:var(--sage);min-height:460px;display:grid;grid-template-columns:1fr 1.05fr;overflow:hidden}.hero-copy{padding:72px 40px 70px max(28px,calc((100vw - 1180px)/2 + 28px));display:flex;flex-direction:column;justify-content:center}.eyebrow{font-size:11px;text-transform:uppercase;letter-spacing:.18em;color:var(--orange);font-weight:700;margin-bottom:19px}.hero h1{font:700 clamp(42px,5vw,70px)/.99 'Playfair Display',serif;margin:0 0 21px;color:var(--green);letter-spacing:-.045em}.hero h1 em{color:var(--orange);font-style:normal}.hero p{color:#5f7168;max-width:390px;line-height:1.7;margin:0 0 28px}.primary{background:var(--green);color:#fff;border-radius:3px;padding:14px 21px;font-weight:700;font-size:13px;display:inline-flex;align-items:center;gap:12px;width:max-content;transition:.2s}.primary:hover{background:#1b3628;transform:translateY(-2px)}.hero-art{position:relative;background:linear-gradient(125deg,#c6d7bd,#aac2a7);min-height:460px}.hero-art:before{content:'';position:absolute;width:390px;height:390px;border-radius:50%;background:#dfe9d7;right:9%;top:34px}.cup{position:absolute;z-index:1;bottom:0;left:29%;width:215px;height:300px;background:linear-gradient(100deg,#f3f2df 0 20%,#dddcc9 47%,#f4f3e1 85%);border-radius:13px 13px 30px 30px;box-shadow:20px 18px 30px #66856b55}.cup:before{content:'';position:absolute;top:-10px;left:-7px;width:228px;height:30px;border-radius:50%;background:#e9ead9;border:9px solid #f7f6e9;box-shadow:inset 0 0 0 4px #657e63}.cup:after{content:'THÉ\A MỘC';white-space:pre;text-align:center;position:absolute;top:105px;left:35px;color:#456a4f;font:700 15px/1.4 'Playfair Display';letter-spacing:.05em}.straw{position:absolute;z-index:2;bottom:266px;left:53%;height:180px;width:11px;background:var(--orange);transform:rotate(18deg);border-radius:8px}.leaf{position:absolute;right:11%;top:21%;font-size:60px;transform:rotate(25deg);opacity:.45}.floating{position:absolute;z-index:3;right:12%;bottom:52px;background:#fff;padding:15px 18px;box-shadow:0 10px 24px #54775e33;font-size:12px;color:var(--green)}.floating b{font-size:18px;display:block;font-family:'Playfair Display'}
+.section{padding:65px 0}.section-head{display:flex;align-items:end;justify-content:space-between;margin-bottom:26px}.section-title{font:700 34px 'Playfair Display';letter-spacing:-.03em;margin:0;color:var(--green)}.section-sub{color:var(--muted);font-size:13px;margin-top:7px}.categories{display:flex;gap:10px;margin-bottom:30px;flex-wrap:wrap}.chip{padding:10px 17px;border:1px solid #d8ddd4;border-radius:30px;background:transparent;color:#637169;font-size:12px}.chip.active,.chip:hover{background:var(--green);color:#fff;border-color:var(--green)}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:17px}.card{background:#fff;position:relative;padding-bottom:17px;transition:.22s}.card:hover{transform:translateY(-4px);box-shadow:0 10px 22px #324b3b12}.product-img{height:215px;position:relative;overflow:hidden;background:#e7ecdf;display:flex;align-items:center;justify-content:center}.product-img img{width:100%;height:100%;object-fit:cover;transition:.4s}.card:hover img{transform:scale(1.05)}.tag{position:absolute;top:12px;left:12px;background:var(--orange);color:white;padding:5px 8px;font-size:10px;font-weight:700}.card-body{padding:15px 16px 0}.card h3{font-size:15px;margin:0 0 6px;color:var(--green)}.desc{font-size:11px;color:var(--muted);margin:0 0 13px}.price{font-weight:700;color:var(--orange)}.add{float:right;background:#eff3eb;color:var(--green);height:28px;width:28px;border-radius:50%;font-size:19px;line-height:25px}.add:hover{background:var(--green);color:#fff}
+.story{background:#edf0e5;padding:65px 0}.story-inner{display:grid;grid-template-columns:1fr 1fr;gap:70px;align-items:center}.story-art{height:280px;position:relative;background:#b4c9af;overflow:hidden}.story-art:after{content:'100%\A lá trà tự nhiên';white-space:pre;position:absolute;right:24px;bottom:22px;background:#fff;padding:14px;color:var(--green);font:600 19px/1.15 'Playfair Display'}.story-art:before{content:'🍃';font-size:180px;position:absolute;left:24%;top:18%;transform:rotate(-25deg);filter:saturate(.7)}.story h2{font:700 37px/1.1 'Playfair Display';color:var(--green);margin:0 0 17px}.story p{color:#65736b;line-height:1.75;max-width:460px}.text-link{color:var(--orange);font-weight:700;font-size:13px;display:inline-block;margin-top:12px}
+.newsletter{padding:52px 0;background:var(--orange);color:white;text-align:center}.newsletter h2{font:700 31px 'Playfair Display';margin:0 0 8px}.newsletter p{margin:0 0 22px;font-size:13px;opacity:.9}.email{display:flex;max-width:380px;margin:auto;background:#fff;padding:5px}.email input{flex:1;border:0;padding:11px;outline:0}.email button{background:var(--green);color:#fff;padding:0 16px;font-weight:700;font-size:12px}
+footer{background:var(--green);color:#dce5db;padding:40px 0 22px}.footer-grid{display:grid;grid-template-columns:2fr 1fr 1fr 1.3fr;gap:30px}.footer-brand{font:700 24px 'Playfair Display';color:#fff}.footer p,.footer a{font-size:12px;color:#b7c9bc;line-height:1.9;display:block;margin:7px 0}.footer h4{font-size:12px;text-transform:uppercase;letter-spacing:.12em;color:#fff;margin:4px 0 13px}.copyright{border-top:1px solid #476453;margin-top:30px;padding-top:17px;font-size:11px;color:#91aa98}
+.drawer{position:fixed;z-index:10;right:-390px;top:0;width:370px;max-width:100%;height:100vh;background:#fff;box-shadow:-8px 0 25px #0002;padding:27px;transition:.3s;display:flex;flex-direction:column}.drawer.open{right:0}.drawer-head{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line);padding-bottom:18px}.drawer h2{font:700 25px 'Playfair Display';color:var(--green);margin:0}.close{background:none;font-size:25px;color:var(--muted)}.cart-items{flex:1;overflow:auto;padding:15px 0}.cart-row{display:flex;gap:12px;padding:13px 0;border-bottom:1px solid var(--line)}.cart-thumb{width:54px;height:54px;object-fit:cover}.cart-row h4{margin:3px 0;font-size:13px}.cart-row small{color:var(--orange)}.qty{margin-left:auto;display:flex;gap:8px;align-items:center}.qty button{width:22px;height:22px;background:#edf2eb;color:var(--green);border-radius:50%}.total{border-top:1px solid var(--line);padding-top:17px;display:flex;justify-content:space-between;font-weight:700;margin-bottom:15px}.empty{color:var(--muted);text-align:center;margin-top:50px}.overlay{display:none;position:fixed;inset:0;background:#14251d66;z-index:9}.overlay.show{display:block}.toast{position:fixed;bottom:25px;left:50%;transform:translateX(-50%) translateY(90px);background:var(--green);color:#fff;padding:13px 20px;border-radius:3px;font-size:13px;z-index:20;transition:.3s}.toast.show{transform:translateX(-50%) translateY(0)}
+@media(max-width:800px){.links{display:none}.hero{grid-template-columns:1fr}.hero-copy{padding:58px 28px}.hero-art{min-height:350px}.grid{grid-template-columns:repeat(2,1fr)}.story-inner{grid-template-columns:1fr;gap:30px}.footer-grid{grid-template-columns:1fr 1fr}.search{display:none}}
+@media(max-width:480px){.container{padding:0 18px}.nav{height:68px}.hero h1{font-size:48px}.grid{grid-template-columns:1fr 1fr;gap:10px}.product-img{height:155px}.card-body{padding:12px 11px}.section{padding:45px 0}.section-title{font-size:28px}.hero-art{min-height:310px}.cup{left:25%;transform:scale(.8);transform-origin:bottom}.footer-grid{grid-template-columns:1fr}.story-art{height:220px}}
 </style>
 </head>
 <body>
-
-<header>
-  <div class="nav">
-    <span class="logo"><span class="chick">🐔</span> Gà Ta Farm</span>
-    <a href="#menu">Sản phẩm</a>
-    <a href="#contact">Liên hệ</a>
-    <button class="cart-btn" onclick="toggleCart()">🛒 Giỏ hàng<span class="badge" id="badge">0</span></button>
-  </div>
-</header>
-
-<div class="hero">
-  <div>
-    <h1>Gà thả vườn <em>tươi mỗi sáng</em>, giao tận nhà trong ngày</h1>
-    <p>Gà ta bản địa nuôi 8–12 tháng, không kháng sinh, không chất tăng trọng. Chặt sẵn theo suất, đóng gói giữ lạnh, giao miễn phí nội thành từ 490k.</p>
-    <a class="btn" href="#menu">Xem giá ngay</a>
-  </div>
-  <div class="hero-emoji">🐓</div>
-</div>
-
-<section id="menu">
-  <h2>Menu hôm nay</h2>
-  <div class="grid" id="products"></div>
-</section>
-
-<section id="contact">
-  <h2>Đặt hàng</h2>
-  <form class="order" id="order-form">
-    <label for="name">Họ tên *</label>
-    <input id="name" required placeholder="Nguyễn Văn A">
-    <label for="phone">Số điện thoại *</label>
-    <input id="phone" required type="tel" pattern="[0-9]{8,11}" placeholder="09xx xxx xxx">
-    <label for="addr">Địa chỉ giao</label>
-    <input id="addr" placeholder="Số nhà, đường, quận/thành phố">
-    <label for="note">Ghi chú</label>
-    <textarea id="note" rows="2" placeholder="VD: giữ lại nội tạng, giao sáng 7h…"></textarea>
-    <p style="margin-top:12px"><button class="btn" type="submit">Gửi đơn</button></p>
-    <p id="form-msg" style="margin-top:10px;color:var(--ok);display:none">✅ Đã nhận đơn! Chúng tôi sẽ gọi xác nhận trong 30 phút.</p>
-  </form>
-</section>
-
-<aside id="cart-panel">
-  <button class="close-x" onclick="toggleCart()">✕</button>
-  <h2>Giỏ hàng</h2>
-  <div id="cart-items"><p style="color:var(--muted)">Chưa có sản phẩm nào.</p></div>
-  <div class="total"><span>Tổng cộng</span><span id="cart-total">0đ</span></div>
-  <button class="btn" onclick="orderFromCart()">Đặt hàng</button>
-</aside>
-
-<div class="toast" id="toast"></div>
-
-<footer>Gà Ta Farm — Hotline 0901 234 567 · 12 Nguyễn Trãi, Q.1, TP.HCM · © 2024</footer>
-
+<div class="topbar">Miễn phí giao hàng cho đơn từ <span>199.000đ</span> · Đặt ngay hôm nay</div>
+<header class="container nav"><a class="brand" href="#">thé mộc<small>tea &amp; more</small></a><nav class="links"><a href="#menu">Thực đơn</a><a href="#story">Về chúng tôi</a><a href="#footer">Cửa hàng</a></nav><div class="nav-actions"><div class="search">⌕ <input id="search" placeholder="Tìm món..." /></div><button class="bag" id="bagBtn" aria-label="Giỏ hàng">♧<span class="badge" id="badge">0</span></button></div></header>
+<main>
+<section class="hero"><div class="hero-copy"><div class="eyebrow">Handcrafted with love</div><h1>Một ngụm<br><em>an yên.</em></h1><p>Trà sữa thủ công từ những lá trà nguyên bản, sữa tươi thanh nhẹ và thật nhiều yêu thương.</p><a class="primary" href="#menu">Khám phá thực đơn <span>→</span></a></div><div class="hero-art"><div class="leaf">🍃</div><div class="straw"></div><div class="cup"></div><div class="floating"><b>Fresh daily</b>Ủ trà mỗi ngày</div></div></section>
+<section class="section container" id="menu"><div class="section-head"><div><h2 class="section-title">Uống gì hôm nay?</h2><p class="section-sub">Những món được yêu thích nhất tại Thé Mộc</p></div></div><div class="categories"><button class="chip active" data-filter="all">Tất cả</button><button class="chip" data-filter="milk">Trà sữa</button><button class="chip" data-filter="tea">Trà nguyên bản</button><button class="chip" data-filter="topping">Topping</button></div><div class="grid" id="products"></div></section>
+<section class="story" id="story"><div class="container story-inner"><div class="story-art"></div><div><div class="eyebrow">Our little story</div><h2>Từ lá trà<br>đến niềm vui.</h2><p>Chúng mình tin một ly trà ngon bắt đầu từ nguyên liệu tử tế. Thé Mộc chọn những lá trà chất lượng, ủ chậm vừa đủ và kết hợp cùng sữa tươi để tạo nên hương vị dịu dàng, tròn đầy.</p><a href="#footer" class="text-link">Tìm hiểu thêm&nbsp; →</a></div></div></section>
+<section class="newsletter"><h2>Nhận chút ngọt ngào nhé?</h2><p>Đăng ký để nhận ưu đãi mới nhất từ Thé Mộc.</p><div class="email"><input id="emailInput" type="email" placeholder="Email của bạn" /><button onclick="subscribe()">ĐĂNG KÝ</button></div></section>
+</main>
+<footer id="footer"><div class="container"><div class="footer-grid"><div><div class="footer-brand">thé mộc</div><p>Một góc nhỏ cho những ngày<br>cần được dịu dàng.</p></div><div><h4>Khám phá</h4><a href="#menu">Thực đơn</a><a href="#story">Câu chuyện</a><a href="#">Tuyển dụng</a></div><div><h4>Hỗ trợ</h4><a href="#">Liên hệ</a><a href="#">Chính sách giao hàng</a><a href="#">Câu hỏi thường gặp</a></div><div><h4>Ghé thăm</h4><p>08 Trà Xanh, Q.1<br>TP. Hồ Chí Minh<br>09:00 — 22:00 mỗi ngày</p></div></div><div class="copyright">© 2024 Thé Mộc. Made with care.</div></div></footer>
+<div class="overlay" id="overlay"></div><aside class="drawer" id="drawer"><div class="drawer-head"><h2>Giỏ hàng</h2><button class="close" id="close">×</button></div><div class="cart-items" id="cartItems"></div><div class="total"><span>Tạm tính</span><span id="total">0đ</span></div><button class="primary" style="justify-content:center;width:100%" onclick="checkout()">Tiến hành thanh toán →</button></aside><div class="toast" id="toast">Đã thêm vào giỏ hàng!</div>
 <script>
-const products = [
-  {id:1, name:"Gà ta nguyên con (~1.8kg)", desc:"Gà mái 10–12 tháng, thịt dai, ngọt. Chặt 4 phần hoặc nguyên con.", price:260000, emoji:"🐔", tag:"Bán chạy"},
-  {id:2, name:"Đùi gà ta (cặp ~700g)", desc:"Cốt lết đùi, phù hợp kho, luộc, quay. Đóng hộp 1kg.", price:95000, emoji:"🍗", tag:""},
-  {id:3, name:"Cánh gà ta (~500g)", desc:"Cánh trên, da vàng ươm, chiên giòn hoặc sả ớt đều hợp.", price:55000, emoji:"🪽", tag:""},
-  {id:4, name:"Gà trống thiến (~2kg)", desc:"Thịt săn, nhiều nạc, ideal cho nhúng lẩu và cháo.", price:310000, emoji:"🐓", tag:"Mới"},
-  {id:5, name:"Trứng gà ta (10 trứng)", desc:"Trứng gà thả vườn tự nhiên, vỏ ngà, yolk đậm. Hộp 10 quả.", price:45000, emoji:"🥚", tag:""},
-  {id:6, name:"Gà con (0.5kg) — bán kg", desc:"Gà con 45 ngày, 120.000đ/kg, cân theo thực tế, cân điện tử quay video.", price:120000, emoji:"🐥", tag:"Giá/kg"}
+const products=[
+ {id:1,name:'Trà sữa Ô long kem sữa',desc:'Ô long rang · kem sữa mịn',price:49000,type:'milk',tag:'Best seller',img:'https://images.unsplash.com/photo-1558857563-b371033873b8?auto=format&fit=crop&w=600&q=80'},
+ {id:2,name:'Trà đào cam sả',desc:'Trà đen · đào vàng · cam tươi',price:45000,type:'tea',tag:'',img:'https://images.unsplash.com/photo-1556679343-c7306c1976bc?auto=format&fit=crop&w=600&q=80'},
+ {id:3,name:'Trà sữa khoai môn',desc:'Khoai môn · sữa tươi · trân châu',price:52000,type:'milk',tag:'Mới',img:'https://images.unsplash.com/photo-1525385133512-2f3bdd039054?auto=format&fit=crop&w=600&q=80'},
+ {id:4,name:'Matcha latte',desc:'Matcha Uji · sữa tươi thanh trùng',price:55000,type:'tea',tag:'',img:'https://images.unsplash.com/photo-1515823064-d6e0c04616a7?auto=format&fit=crop&w=600&q=80'},
+ {id:5,name:'Trân châu đường đen',desc:'Topping thêm · dẻo thơm',price:10000,type:'topping',tag:'',img:'https://images.unsplash.com/photo-1587080413959-06b859fb107d?auto=format&fit=crop&w=600&q=80'},
+ {id:6,name:'Trà lài macchiato',desc:'Trà lài · foam phô mai mặn',price:49000,type:'tea',tag:'Yêu thích',img:'https://images.unsplash.com/photo-1544145945-f90425340c7e?auto=format&fit=crop&w=600&q=80'},
+ {id:7,name:'Sữa tươi trân châu',desc:'Sữa tươi · đường nâu · trân châu',price:47000,type:'milk',tag:'',img:'https://images.unsplash.com/photo-1577968897966-3d4325b36b61?auto=format&fit=crop&w=600&q=80'},
+ {id:8,name:'Thạch nha đam',desc:'Topping thêm · giòn mát',price:10000,type:'topping',tag:'',img:'https://images.unsplash.com/photo-1544145945-f90425340c7e?auto=format&fit=crop&w=600&q=80'}
 ];
-let cart = {};
-
-const fmt = n => n.toLocaleString("vi-VN") + "đ";
-const grid = document.getElementById("products");
-
-products.forEach(p=>{
-  const card = document.createElement("div");
-  card.className = "card";
-  card.innerHTML = `
-    <div class="thumb">${p.emoji}${p.tag?`<span class="tag" style="top:8px;left:8px">${p.tag}</span>`:""}</div>
-    <div class="body">
-      <h3>${p.name}</h3>
-      <div class="desc">${p.desc}</div>
-      <div class="row">
-        <span class="price">${fmt(p.price)}</span>
-        <button class="add" onclick="addToCart(${p.id})">+ Thêm</button>
-      </div>
-    </div>`;
-  grid.appendChild(card);
-});
-
-function addToCart(id){
-  cart[id] = (cart[id]||0)+1;
-  renderCart();
-  const p = products.find(x=>x.id===id);
-  toast(`Đã thêm: ${p.name}`);
-}
-function changeQty(id,d){
-  cart[id]=(cart[id]||0)+d;
-  if(cart[id]<=0) delete cart[id];
-  renderCart();
-}
-function cartCount(){ return Object.values(cart).reduce((a,b)=>a+b,0); }
-function cartTotal(){ return Object.entries(cart).reduce((s,[id,q])=>s+products.find(p=>p.id==id).price*q,0); }
-
-function renderCart(){
-  const box = document.getElementById("cart-items");
-  document.getElementById("badge").textContent = cartCount();
-  const ids = Object.keys(cart);
-  if(!ids.length){ box.innerHTML = '<p style="color:var(--muted)">Chưa có sản phẩm nào.</p>'; }
-  else box.innerHTML = ids.map(id=>{
-    const p = products.find(x=>x.id==id);
-    return `<div class="item"><span class="nm">${p.emoji} ${p.name}</span>
-      <span class="qty"><button onclick="changeQty(${id},-1)">−</button><span>${cart[id]}</span><button onclick="changeQty(${id},1)">+</button></span></div>`;
-  }).join("");
-  document.getElementById("cart-total").textContent = fmt(cartTotal());
-}
-function toggleCart(){ document.getElementById("cart-panel").classList.toggle("open"); }
-function orderFromCart(){
-  if(!cartCount()){ toast("Giỏ hàng đang trống 🐔"); return; }
-  toast(`Đặt ${cartCount()} món — tổng ${fmt(cartTotal())}. Gọi 0901 234 567 để xác nhận!`);
-  cart = {}; renderCart(); toggleCart();
-}
-function toast(msg){
-  const t = document.getElementById("toast");
-  t.textContent = msg; t.classList.add("show");
-  clearTimeout(t._h); t._h = setTimeout(()=>t.classList.remove("show"), 2400);
-}
-document.getElementById("order-form").addEventListener("submit", e=>{
-  e.preventDefault();
-  document.getElementById("form-msg").style.display="block";
-  e.target.reset();
-  toast("Cảm ơn! Đơn đã được ghi nhận.");
-});
-</script>
-</body>
-</html>
+let cart=[]; const money=n=>n.toLocaleString('vi-VN')+'đ';
+function render(list=products){document.getElementById('products').innerHTML=list.map(p=>`<article class="card"><div class="product-img">${p.tag?`<span class="tag">${p.tag}</span>`:''}<img src="${p.img}" alt="${p.name}" loading="lazy"></div><div class="card-body"><h3>${p.name}</h3><p class="desc">${p.desc}</p><span class="price">${money(p.price)}</span><button class="add" onclick="add(${p.id})">+</button></div></article>`).join('')}
+function add(id){let x=cart.find(i=>i.id===id);x?x.qty++:cart.push({id,qty:1});update();toast('Đã thêm vào giỏ hàng!')}
+function update(){document.getElementById('badge').textContent=cart.reduce((a,b)=>a+b.qty,0);document.getElementById('cartItems').innerHTML=cart.length?cart.map(i=>{let p=products.find(x=>x.id===i.id);return `<div class="cart-row"><img class="cart-thumb" src="${p.img}"><div><h4>${p.name}</h4><small>${money(p.price)}</small></div><div class="qty"><button onclick="change(${p.id},-1)">−</button>${i.qty}<button onclick="change(${p.id},1)">+</button></div></div>`}).join(''):'<p class="empty">Giỏ hàng đang trống.<br>Thêm một chút ngọt ngào nhé!</p>';document.getElementById('total').textContent=money(cart.reduce((a,i)=>a+products.find(p=>p.id===i.id).price*i.qty,0))}
+function change(id,n){let x=cart.find(i=>i.id===id);if(!x)return;x.qty+=n;if(x.qty<1)cart=cart.filter(i=>i.id!==id);update()}
+function toast(t){let e=document.getElementById('toast');e.textContent=t;e.classList.add('show');setTimeout(()=>e.classList.remove('show'),1800)}
+document.querySelectorAll('.chip').forEach(b=>b.onclick=()=>{document.querySelector('.chip.active').classList.remove('active');b.classList.add('active');render(b.dataset.filter==='all'?products:products.filter(p=>p.type===b.dataset.filter))});document.getElementById('search').oninput=e=>render(products.filter(p=>p.name.toLowerCase().includes(e.target.value.toLowerCase())));function toggle(o){document.getElementById('drawer').classList.toggle('open',o);document.getElementById('overlay').classList.toggle('show',o)}document.getElementById('bagBtn').onclick=()=>toggle(true);document.getElementById('close').onclick=()=>toggle(false);document.getElementById('overlay').onclick=()=>toggle(false);function subscribe(){let e=document.getElementById('emailInput');if(!e.value||!e.checkValidity()){toast('Vui lòng nhập email hợp lệ!');return}toast('Cảm ơn bạn đã đăng ký!');e.value=''};function checkout(){cart.length?toast('Cảm ơn bạn! Tính năng thanh toán đang được mở rộng.'):toast('Giỏ hàng đang trống!')}render();update();
+</script></body></html>

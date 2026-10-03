@@ -1,3 +1,4 @@
+import hashlib
 import json
 import unittest
 from unittest.mock import patch
@@ -78,7 +79,16 @@ class ContextBudgetTests(unittest.TestCase):
 
 
 class CompactorTests(unittest.TestCase):
-    def build(self, records, *, budget=None, previous=None, counter=fake_message_tokens):
+    def build(
+        self,
+        records,
+        *,
+        budget=None,
+        previous=None,
+        counter=fake_message_tokens,
+        compact_tool_call_ids=None,
+        omit_tool_call_ids=None,
+    ):
         compactor = Compactor(budget=budget or small_budget(100))
         with (
             patch("context.compactor.llm.count_messages_tokens", side_effect=counter),
@@ -91,6 +101,8 @@ class CompactorTests(unittest.TestCase):
                 checkpoint=previous,
                 session_id="s",
                 goal="Continue the task",
+                compact_tool_call_ids=compact_tool_call_ids,
+                omit_tool_call_ids=omit_tool_call_ids,
             )
         return result, complete
 
@@ -109,6 +121,53 @@ class CompactorTests(unittest.TestCase):
         self.assertIs(result.messages[0], system)
         self.assertEqual(result.messages[1:], [records[0][1]])
         complete.assert_not_called()
+
+    def test_completed_large_write_is_projected_without_mutating_journal_message(self):
+        body = "x" * 12_000
+        arguments = json.dumps({"path": "output/index.html", "content": body})
+        records = [
+            (1, {"role": "user", "content": "build it"}),
+            (2, {"role": "assistant", "tool_calls": [{
+                "id": "write-1",
+                "type": "function",
+                "function": {"name": "write", "arguments": arguments},
+            }]}),
+            (3, {"role": "tool", "tool_call_id": "write-1", "content": "Successfully wrote output/index.html"}),
+        ]
+
+        result, _ = self.build(
+            records,
+            budget=small_budget(100_000),
+            compact_tool_call_ids={"write-1"},
+        )
+
+        projected = json.loads(result.messages[2]["tool_calls"][0]["function"]["arguments"])
+        self.assertEqual(projected["path"], "output/index.html")
+        self.assertEqual(
+            projected["content"],
+            f"[omitted: 12000 bytes, sha256={hashlib.sha256(body.encode()).hexdigest()}]",
+        )
+        self.assertEqual(records[1][1]["tool_calls"][0]["function"]["arguments"], arguments)
+
+    def test_runtime_represented_plan_calls_are_omitted_as_complete_groups(self):
+        records = [
+            (1, {"role": "user", "content": "build it"}),
+            (2, {"role": "assistant", "tool_calls": [{
+                "id": "plan-1",
+                "type": "function",
+                "function": {"name": "update_plan", "arguments": '{"action":"create","steps":[{"task":"work"}]}'},
+            }]}),
+            (3, {"role": "tool", "tool_call_id": "plan-1", "content": "Created 1 pending step(s): step_1"}),
+            (4, {"role": "assistant", "content": "continuing"}),
+        ]
+
+        result, _ = self.build(
+            records,
+            budget=small_budget(100_000),
+            omit_tool_call_ids={"plan-1"},
+        )
+
+        self.assertEqual(result.messages[1:], [records[0][1], records[3][1]])
 
     def test_newest_user_is_preserved_and_older_user_budget_is_enforced(self):
         records = [

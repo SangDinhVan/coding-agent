@@ -52,6 +52,58 @@ class SandboxToolTests(unittest.TestCase):
         self.assertEqual(sandbox.calls[0][0], "exec")
         self.assertEqual(str(sandbox.calls[0][1].cwd), ".")
 
+    def test_bash_records_declared_verification_kind(self):
+        sandbox = FakeSandbox()
+
+        result = BashTool(sandbox).run(
+            command="python -m unittest",
+            verification_kind="behavioral",
+        )
+
+        self.assertEqual(result.metadata["verification_kind"], "behavioral")
+        self.assertTrue(result.metadata["passed"])
+        self.assertEqual(
+            sandbox.calls[0][1].command,
+            "set -euo pipefail\npython -m unittest",
+        )
+        self.assertEqual(
+            BashTool(sandbox).parameters["properties"]["verification_kind"]["enum"],
+            ["structural", "behavioral"],
+        )
+
+    def test_bash_rejects_unknown_verification_kind(self):
+        sandbox = FakeSandbox()
+
+        result = BashTool(sandbox).run(
+            command="echo ok",
+            verification_kind="looks-good",
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn("verification_kind", result.compact)
+        self.assertEqual(sandbox.calls, [])
+
+    def test_failed_verification_cannot_be_hidden_by_later_pipeline_command(self):
+        sandbox = FakeSandbox()
+        sandbox.exec = lambda request: SandboxResult(
+            ExecutionStatus.RUNTIME_ERROR,
+            "later output",
+            "",
+            1,
+            ViolationStatus.UNKNOWN,
+            "s1",
+            "cid",
+            "image@sha256:" + "a" * 64,
+        )
+
+        result = BashTool(sandbox).run(
+            command="python check.py | head; printf done",
+            verification_kind="structural",
+        )
+
+        self.assertFalse(result.success)
+        self.assertFalse(result.metadata["passed"])
+
     def test_registry_binds_every_os_tool_to_same_session(self):
         sandbox = FakeSandbox()
         registry = ToolRegistry(sandbox)

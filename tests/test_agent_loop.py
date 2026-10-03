@@ -1,4 +1,5 @@
 import tempfile
+import json
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -109,7 +110,43 @@ class AgentLoopCharacterizationTests(unittest.TestCase):
             messages = agent.event_store.to_messages()
             self.assertEqual([m["role"] for m in messages], ["user", "assistant", "tool", "assistant"])
             self.assertEqual(messages[2]["tool_call_id"], "call-1")
-            self.assertEqual(messages[2]["content"], "compact-ok")
+            self.assertEqual(messages[2]["content"], "compact-ok\nExecution ID: exec_1")
+
+    def test_completed_large_write_body_is_not_replayed_to_model(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tool = FakeTool()
+            tool.name = "write"
+            agent = self.agent(directory, tool)
+            body = "x" * 12_000
+            calls = 0
+
+            def respond(**kwargs):
+                nonlocal calls
+                calls += 1
+                if calls == 1:
+                    return iter(stream_tool_call(
+                        "write-1",
+                        "write",
+                        json.dumps({"path": "output/index.html", "content": body}),
+                    ))
+                serialized = json.dumps(kwargs["messages"])
+                self.assertNotIn(body, serialized)
+                self.assertIn("[omitted: 12000 bytes", serialized)
+                return iter(stream_text("finished"))
+
+            with patch("agent.loop.llm.complete", side_effect=respond):
+                self.assertEqual(agent.run_turn("goal"), "finished")
+
+    def test_system_prompt_explains_optional_plan_and_step_lifecycle(self):
+        with tempfile.TemporaryDirectory() as directory:
+            agent = self.agent(directory)
+            prompt = agent._build_system_message()["content"]
+
+            self.assertIn("Tác vụ đơn giản", prompt)
+            self.assertIn("complete_step/fail_step", prompt)
+            self.assertIn("exec_1", prompt)
+            self.assertIn("structural", prompt)
+            self.assertIn("behavioral", prompt)
 
     def test_failed_tool_result_does_not_crash_turn(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -128,6 +165,29 @@ class AgentLoopCharacterizationTests(unittest.TestCase):
                 self.assertEqual(agent.run_turn("goal", max_iterations=2), "")
             self.assertEqual(complete.call_count, 2)
             self.assertEqual(agent.turn_state.status.value, "failed")
+
+    def test_repeated_action_without_progress_stops_as_stagnation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            agent = self.agent(directory)
+            repeated = stream_tool_call(
+                "call-1",
+                "update_plan",
+                '{"action":"complete_step","step_id":"missing","note":"done"}',
+            )
+            responses = [
+                stream_tool_call("create", "update_plan", '{"action":"create_plan","steps":[{"task":"work"}]}'),
+                repeated,
+                stream_tool_call(
+                    "call-2", "update_plan",
+                    '{"action":"complete_step","step_id":"missing","note":"done"}',
+                ),
+            ]
+
+            with patch("agent.loop.llm.complete", side_effect=responses) as complete:
+                self.assertEqual(agent.run_turn("goal", max_iterations=20), "")
+
+            self.assertEqual(complete.call_count, 3)
+            self.assertEqual(agent.turn_state.error.category, "stagnation_detected")
 
     def test_interrupt_does_not_persist_partial_text_as_final(self):
         with tempfile.TemporaryDirectory() as directory:

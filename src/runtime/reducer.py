@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict
+import json
 from typing import Iterable
 
 from memory.event_store import JournalCorruptionError
@@ -28,6 +28,11 @@ from runtime.models import (
 
 _TERMINAL_TURNS = {TurnStatus.COMPLETED, TurnStatus.INTERRUPTED, TurnStatus.FAILED}
 _TERMINAL_TOOLS = {ToolExecutionStatus.COMPLETED, ToolExecutionStatus.FAILED, ToolExecutionStatus.CANCELLED}
+_STATE_VERSION_EVENTS = {
+    "TurnStarted", "TurnCompleted", "TurnInterrupted", "TurnFailed",
+    "PlanCreated", "PlanRevised", "PlanStepStarted", "PlanStepCompleted",
+    "PlanStepFailed", "PlanStepSkipped", "ToolCompleted", "ToolRecoveredAsCompleted",
+}
 
 
 def _error(payload: dict) -> ErrorRecord:
@@ -266,6 +271,9 @@ def reduce_event(state: RuntimeState, event: dict) -> RuntimeState:
         or kind in {"ToolRequested", "ToolValidated", "ToolApprovalRequested", "ToolApproved", "ToolRejected", "ToolStarted", "ToolCompleted", "ToolFailed", "ToolCancelled", "ToolRecoveryRequired", "ToolRecoveredAsCompleted", "ToolRecoveredAsFailed", "ToolRetryScheduled"}
     ):
         raise ValueError(f"unknown event type: {kind}")
+    if kind in _STATE_VERSION_EVENTS:
+        if kind not in {"ToolCompleted", "ToolRecoveredAsCompleted"} or state.executions[aggregate_id].tool_name != "update_plan":
+            state.state_version = event["seq"]
     return state
 
 
@@ -323,11 +331,59 @@ def pending_runtime_actions(state: RuntimeState) -> list[PendingRuntimeAction]:
     return actions
 
 
-def runtime_prompt_projection(state: RuntimeState) -> str:
+def runtime_state_frame(state: RuntimeState) -> dict:
     if state.active_turn_id is None:
-        return "(no active turn)"
+        return {
+            "state_version": state.state_version,
+            "turn": None,
+            "plan": None,
+            "allowed_actions": [],
+            "blockers": [],
+        }
     turn = state.turns[state.active_turn_id]
-    lines = [f"Turn {turn.turn_id}: {turn.status.value}", f"Goal: {turn.goal}", f"Iteration: {turn.iteration}"]
-    for blocker in completion_blockers(state, turn.turn_id):
-        lines.append(f"Blocker {blocker.code}: {blocker.message} {' '.join(blocker.ids)}".rstrip())
-    return "\n".join(lines)
+    plan = state.plans.get(turn.plan_id) if turn.plan_id else None
+    plan_frame = None
+    allowed_actions = []
+    blocker_ids = []
+    if plan:
+        revision = plan.revisions[-1]
+        steps = []
+        for step in revision.steps:
+            steps.append({
+                "id": step.step_id,
+                "task": step.task,
+                "status": step.status.value,
+                "required": step.required,
+                "completion_policy": step.completion_policy.value,
+            })
+            if step.status not in {PlanStepStatus.COMPLETED, PlanStepStatus.SKIPPED}:
+                allowed_actions.extend([
+                    {
+                        "action": "complete_step",
+                        "step_id": step.step_id,
+                        "requires_evidence": step.completion_policy == CompletionPolicy.EVIDENCE_REQUIRED,
+                    },
+                    {"action": "fail_step", "step_id": step.step_id},
+                ])
+            if step.required and step.status not in {PlanStepStatus.COMPLETED, PlanStepStatus.SKIPPED}:
+                blocker_ids.append(step.step_id)
+        plan_frame = {"id": plan.plan_id, "revision": revision.revision, "steps": steps}
+        allowed_actions.append({"action": "revise_plan"})
+    else:
+        allowed_actions.append({"action": "create_plan"})
+    return {
+        "state_version": state.state_version,
+        "turn": {
+            "id": turn.turn_id,
+            "status": turn.status.value,
+            "goal": turn.goal,
+            "iteration": turn.iteration,
+        },
+        "plan": plan_frame,
+        "allowed_actions": allowed_actions,
+        "blockers": blocker_ids,
+    }
+
+
+def runtime_prompt_projection(state: RuntimeState) -> str:
+    return json.dumps(runtime_state_frame(state), ensure_ascii=False, indent=2)

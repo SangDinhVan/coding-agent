@@ -231,6 +231,7 @@ class ToolExecution:
 @dataclass
 class RuntimeState:
     session_id: str
+    state_version: int = 0
     turns: dict[str, TurnState] = field(default_factory=dict)
     plans: dict[str, Plan] = field(default_factory=dict)
     executions: dict[str, ToolExecution] = field(default_factory=dict)

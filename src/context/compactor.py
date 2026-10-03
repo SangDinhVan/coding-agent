@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import copy
+import hashlib
 import json
 import time
 from dataclasses import dataclass
@@ -20,6 +22,8 @@ NARRATIVE_FIELDS = {
     "critical_references",
     "verification",
 }
+
+LARGE_ARGUMENT_BYTES = 1_000
 
 SUMMARY_PROMPT_TEMPLATE = """\
 Bạn đang tạo checkpoint bàn giao có cấu trúc cho một coding agent.
@@ -128,9 +132,16 @@ class Compactor:
         checkpoint: CompactionCheckpoint | None,
         session_id: str,
         goal: str,
+        compact_tool_call_ids: set[str] | None = None,
+        omit_tool_call_ids: set[str] | None = None,
     ) -> CompactionResult:
+        projected_records = self._project_records(
+            message_records,
+            compact_tool_call_ids or set(),
+            omit_tool_call_ids or set(),
+        )
         covered = checkpoint.covers_through_seq if checkpoint else 0
-        uncovered = [(seq, message) for seq, message in message_records if seq > covered]
+        uncovered = [(seq, message) for seq, message in projected_records if seq > covered]
         current = [system_message]
         if checkpoint is not None:
             current.append(checkpoint.to_message())
@@ -165,7 +176,7 @@ class Compactor:
             raise CompactionError("generated checkpoint exceeds checkpoint token allowance")
 
         rebuilt = [system_message, new_checkpoint.to_message()]
-        rebuilt.extend(message for seq, message in message_records if seq > new_checkpoint.covers_through_seq)
+        rebuilt.extend(message for seq, message in projected_records if seq > new_checkpoint.covers_through_seq)
         after = self._messages_tokens(rebuilt)
         if after > self.budget.available_input_tokens:
             raise ContextBudgetExceeded("rebuilt context still exceeds available input budget")
@@ -178,6 +189,73 @@ class Compactor:
             summary_tokens,
             duration_ms,
         )
+
+    def _project_records(
+        self,
+        records: list[tuple[int, dict]],
+        compact_tool_call_ids: set[str],
+        omit_tool_call_ids: set[str],
+    ) -> list[tuple[int, dict]]:
+        projected = []
+        for seq, message in records:
+            if message.get("role") == "tool" and message.get("tool_call_id") in omit_tool_call_ids:
+                continue
+            tool_calls = message.get("tool_calls") or []
+            if not tool_calls:
+                projected.append((seq, message))
+                continue
+            kept_calls = []
+            changed = False
+            for call in tool_calls:
+                call_id = call.get("id")
+                if call_id in omit_tool_call_ids:
+                    changed = True
+                    continue
+                if call_id in compact_tool_call_ids:
+                    compacted = self._compact_tool_call(call)
+                    kept_calls.append(compacted)
+                    changed = changed or compacted is not call
+                else:
+                    kept_calls.append(call)
+            if not kept_calls and not message.get("content"):
+                continue
+            if changed:
+                message = copy.deepcopy(message)
+                if kept_calls:
+                    message["tool_calls"] = kept_calls
+                else:
+                    message.pop("tool_calls", None)
+            projected.append((seq, message))
+        return projected
+
+    def _compact_tool_call(self, call: dict) -> dict:
+        function = call.get("function", {})
+        if function.get("name") not in {"write", "edit"}:
+            return call
+        try:
+            arguments = json.loads(function.get("arguments", ""))
+        except (json.JSONDecodeError, TypeError):
+            return call
+        changed = False
+        for key in ("content", "old_string", "new_string"):
+            value = arguments.get(key)
+            if not isinstance(value, str):
+                continue
+            encoded = value.encode("utf-8")
+            if len(encoded) < LARGE_ARGUMENT_BYTES:
+                continue
+            arguments[key] = (
+                f"[omitted: {len(encoded)} bytes, "
+                f"sha256={hashlib.sha256(encoded).hexdigest()}]"
+            )
+            changed = True
+        if not changed:
+            return call
+        compacted = copy.deepcopy(call)
+        compacted["function"]["arguments"] = json.dumps(
+            arguments, ensure_ascii=False, separators=(",", ":")
+        )
+        return compacted
 
     def _select_raw_suffix(
         self,

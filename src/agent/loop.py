@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import json
 import mimetypes
 import shutil
 from pathlib import Path
@@ -19,7 +21,7 @@ from memory.manager import MemoryManager
 from model import llm
 from runtime.executor import ToolExecutor
 from runtime.models import CompletionPolicy, PlanMode, PlanStepStatus, RecoveryDecision, ToolExecutionStatus, TurnStatus
-from runtime.reducer import completion_blockers, pending_runtime_actions, replay, runtime_prompt_projection
+from runtime.reducer import completion_blockers, pending_runtime_actions, replay, runtime_prompt_projection, runtime_state_frame
 from sandbox.changes import apply_changeset, load_changeset
 from sandbox.models import SandboxStatus, WorkspaceMode
 from tools.base import ToolResult
@@ -62,6 +64,14 @@ class StreamedToolCall:
 SYSTEM_PROMPT_TEMPLATE = """\
 Bạn là 1 coding agent cá nhân, có quyền đọc/ghi/sửa file và chạy lệnh shell thông qua các tool được cung cấp.
 
+Tác vụ đơn giản có thể hoàn thành trực tiếp thì không tạo plan.
+State frame là nguồn sự thật duy nhất cho plan và allowed_actions. Chỉ gọi intent
+đang được cho phép; complete_step/fail_step tự thực thi lifecycle hợp lệ bên trong
+runtime. Step evidence_required phải dùng Execution ID dạng exec_1, exec_2 từ kết
+quả tool thành công.
+Khi kiểm tra, structural chỉ xác nhận cấu trúc/static; behavioral phải thực sự
+chạy hành vi, test hoặc trình duyệt. Không gọi structural là behavioral.
+
 --- PROJECT.md (advisory facts về project) ---
 {project_md}
 
@@ -75,6 +85,20 @@ PROJECT.md whenever they conflict.
 --- Workspace ---
 {workspace_state}
 """
+
+
+def tool_message_content(result: ToolResult, execution_id: str) -> str:
+    verification_kind = result.metadata.get("verification_kind")
+    if verification_kind and verification_kind != "unclassified":
+        verification = json.dumps({
+            "verification_kind": verification_kind,
+            "passed": bool(result.metadata.get("passed")),
+            "execution_alias": execution_id,
+        }, separators=(",", ":"))
+        return f"{result.compact}\nVerification: {verification}"
+    if not result.success:
+        return result.compact
+    return f"{result.compact}\nExecution ID: {execution_id}"
 
 
 class Agent:
@@ -178,6 +202,74 @@ class Agent:
         self.runtime_state = replay(self.event_store.read_all(), current_runtime_instance_id=self.event_store.runtime_instance_id)
         self.turn_state = self._latest_turn()
 
+    def _execution_alias(self, execution_id: str) -> str:
+        for index, current_id in enumerate(self.runtime_state.executions, 1):
+            if current_id == execution_id:
+                return f"exec_{index}"
+        raise ValueError("unknown execution")
+
+    def _resolve_execution_reference(self, reference: str) -> str | None:
+        if reference in self.runtime_state.executions:
+            return reference
+        for index, execution_id in enumerate(self.runtime_state.executions, 1):
+            if reference == f"exec_{index}":
+                return execution_id
+        return None
+
+    def _successful_execution_aliases(self) -> list[str]:
+        aliases = [
+            self._execution_alias(execution.execution_id)
+            for execution in self.runtime_state.executions.values()
+            if execution.session_id == self.runtime_state.session_id
+            and execution.status == ToolExecutionStatus.COMPLETED
+            and execution.tool_name != "update_plan"
+        ]
+        return aliases[-10:]
+
+    def _workspace_hash(self) -> str:
+        files = {}
+        for execution in self.runtime_state.executions.values():
+            if execution.status != ToolExecutionStatus.COMPLETED or execution.tool_name not in {"write", "edit"}:
+                continue
+            path = execution.arguments.get("path")
+            if not isinstance(path, str) or execution.result is None:
+                continue
+            digest = execution.result.metadata.get("sha256") or execution.recovery_metadata.get("expected_after_hash")
+            if digest:
+                files[path] = digest
+        payload = json.dumps(files, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(payload.encode()).hexdigest()
+
+    def _last_successful_execution(self) -> str | None:
+        completed = [
+            execution for execution in self.runtime_state.executions.values()
+            if execution.status == ToolExecutionStatus.COMPLETED and execution.tool_name != "update_plan"
+        ]
+        return self._execution_alias(completed[-1].execution_id) if completed else None
+
+    def _progress_fingerprint(self, turn_id: str) -> tuple:
+        blockers = tuple(
+            (blocker.code, blocker.ids)
+            for blocker in completion_blockers(self.runtime_state, turn_id)
+        )
+        return (
+            self.runtime_state.state_version,
+            self._workspace_hash(),
+            blockers,
+            self._last_successful_execution(),
+        )
+
+    @staticmethod
+    def _action_signature(tool_calls) -> str:
+        actions = []
+        for call in tool_calls:
+            try:
+                arguments = json.loads(call.function.arguments)
+            except (json.JSONDecodeError, TypeError):
+                arguments = call.function.arguments
+            actions.append({"tool": call.function.name, "arguments": arguments})
+        return json.dumps(actions, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+
     def _event(self, event_type, aggregate_type, aggregate_id, payload, *, turn_id=None, causation_id=None):
         event = self.event_store.append_event(
             event_type,
@@ -204,12 +296,23 @@ class Agent:
     def _build_context(self) -> list[dict]:
         turn = self.runtime_state.turns.get(self.runtime_state.active_turn_id)
         goal = turn.goal if turn is not None else (self.checkpoint.goal if self.checkpoint else "")
+        completed = [
+            execution for execution in self.runtime_state.executions.values()
+            if execution.status == ToolExecutionStatus.COMPLETED
+        ]
+        compact_tool_call_ids = {
+            execution.tool_call_id for execution in completed
+            if execution.tool_name in {"write", "edit"}
+        }
+        omit_tool_call_ids = self._control_tool_call_ids_to_omit(turn)
         result = self.compactor.build_context(
             system_message=self._build_system_message(),
             message_records=self.event_store.message_records(),
             checkpoint=self.checkpoint,
             session_id=self.event_store.session_id,
             goal=goal,
+            compact_tool_call_ids=compact_tool_call_ids,
+            omit_tool_call_ids=omit_tool_call_ids,
         )
         if result.compacted and result.checkpoint is not None:
             previous_seq = self.checkpoint.covers_through_seq if self.checkpoint else 0
@@ -230,6 +333,23 @@ class Agent:
                 turn_id=self.runtime_state.active_turn_id,
             )
         return result.messages
+
+    def _control_tool_call_ids_to_omit(self, turn) -> set[str]:
+        if turn is None:
+            return set()
+        controls = [
+            execution for execution in self.runtime_state.executions.values()
+            if execution.turn_id == turn.turn_id and execution.tool_name == "update_plan"
+        ]
+        keep_failed_id = (
+            controls[-1].execution_id
+            if controls and controls[-1].status == ToolExecutionStatus.FAILED
+            else None
+        )
+        return {
+            execution.tool_call_id for execution in controls
+            if execution.execution_id != keep_failed_id
+        }
 
     def _run_with_trace(self, turn_id: str, action):
         filename = f"{turn_id}.txt"
@@ -323,7 +443,12 @@ class Agent:
         if execution is None:
             raise ValueError("unknown execution")
         result = self.tool_executor.resolve_approval(execution_id, approved, note)
-        self.event_store.append("tool", result.compact, tool_call_id=execution.tool_call_id, turn_id=execution.turn_id)
+        self.event_store.append(
+            "tool",
+            tool_message_content(result, self._execution_alias(execution_id)),
+            tool_call_id=execution.tool_call_id,
+            turn_id=execution.turn_id,
+        )
         self._refresh()
 
     def resolve_recovery(self, execution_id: str, decision: RecoveryDecision, note: str) -> None:
@@ -358,7 +483,7 @@ class Agent:
             if current.status == ToolExecutionStatus.WAITING_APPROVAL:
                 return False
             self.event_store.append(
-                "tool", result.compact,
+                "tool", tool_message_content(result, self._execution_alias(execution.execution_id)),
                 tool_call_id=execution.tool_call_id,
                 turn_id=turn_id,
             )
@@ -392,6 +517,8 @@ class Agent:
 
     def _drive_turn(self, turn_id: str, max_iterations: int) -> str:
         final_text = ""
+        previous_progress = None
+        previous_action = None
         for _ in range(max_iterations):
             turn = self.runtime_state.turns[turn_id]
             self._event(
@@ -402,7 +529,7 @@ class Agent:
                 print(f"[model] waiting for response (iteration {turn.iteration + 1})...", flush=True)
                 response = llm.complete(
                     messages=self._build_context(),
-                    tools=self.tool_registry.schemas() + [self.plan_tool.schema()],
+                    tools=self.tool_registry.schemas() + [self.plan_tool.schema(self.runtime_state)],
                     model=self.model,
                     stream=True,
                 )
@@ -421,6 +548,20 @@ class Agent:
                 raise
 
             if tool_calls:
+                progress = self._progress_fingerprint(turn_id)
+                action = self._action_signature(tool_calls)
+                if action == previous_action and progress == previous_progress:
+                    self._event(
+                        "TurnFailed", "turn", turn_id,
+                        {"error": {
+                            "category": "stagnation_detected",
+                            "message": "Repeated the same action without state or workspace progress",
+                        }},
+                        turn_id=turn_id,
+                    )
+                    return ""
+                previous_progress = progress
+                previous_action = action
                 self.event_store.append(
                     "assistant",
                     response_text or None,
@@ -458,7 +599,12 @@ class Agent:
                     execution = self.runtime_state.executions[execution_id]
                     if execution.status == ToolExecutionStatus.WAITING_APPROVAL:
                         return ""
-                    self.event_store.append("tool", result.compact, tool_call_id=tool_call.id, turn_id=turn_id)
+                    self.event_store.append(
+                        "tool",
+                        tool_message_content(result, self._execution_alias(execution_id)),
+                        tool_call_id=tool_call.id,
+                        turn_id=turn_id,
+                    )
                     self._refresh()
                 if interrupted:
                     self._event("TurnInterrupted", "turn", turn_id, {"reason": "user"}, turn_id=turn_id)
@@ -502,15 +648,32 @@ class Agent:
     def _apply_plan_action(self, *, execution_id: str, turn_id: str, action: str, **arguments) -> ToolResult:
         turn = self.runtime_state.turns[turn_id]
         plan = self.runtime_state.plans.get(turn.plan_id) if turn.plan_id else None
+        before = self.runtime_state.state_version
+
+        def envelope(outcome: str, delta: dict | None = None, error: str | None = None, success: bool = True):
+            payload = {
+                "outcome": outcome,
+                "state_version_before": before,
+                "state_version_after": self.runtime_state.state_version,
+                "delta": delta or {},
+                "current_state": runtime_state_frame(self.runtime_state),
+            }
+            if error:
+                payload["error"] = error
+            content = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+            return ToolResult(content, content, success, metadata={"transition": payload})
+
         try:
-            if action == "create":
+            if action == "create_plan":
                 if plan is not None:
                     raise ValueError("an active plan already exists")
                 requested_steps = arguments.get("steps")
                 if not isinstance(requested_steps, list) or not requested_steps:
-                    raise ValueError("create requires at least one plan step")
+                    raise ValueError("create_plan requires at least one plan step")
                 steps = []
                 for index, item in enumerate(requested_steps, 1):
+                    if not isinstance(item, dict):
+                        raise ValueError("each plan step must be an object")
                     task = str(item.get("task", "")).strip()
                     if not task:
                         raise ValueError("each plan step requires a task")
@@ -529,92 +692,119 @@ class Agent:
                     {"mode": turn.plan_mode.value, "actor": "model", "reason": arguments.get("reason") or "created", "steps": steps},
                     turn_id=turn_id, causation_id=execution_id,
                 )
-                return ToolResult(f"Created plan {plan_id}", f"Created plan with {len(steps)} step(s)", True)
+                return envelope("applied", {"plan": {"from": None, "to": plan_id}})
 
             if plan is None:
                 raise ValueError("no active plan")
-            if action == "set_step_status":
+            if action in {"complete_step", "fail_step"}:
                 step_id = arguments.get("step_id")
-                status = arguments.get("status")
                 step = next((item for item in plan.revisions[-1].steps if item.step_id == step_id), None)
                 if step is None:
-                    raise ValueError(f"unknown plan step: {step_id}")
-                event_type = {
-                    "in_progress": "PlanStepStarted",
-                    "completed": "PlanStepCompleted",
-                    "failed": "PlanStepFailed",
-                }.get(status)
-                if event_type is None:
-                    raise ValueError("model cannot skip a plan step")
-                note = str(arguments.get("note", "")).strip() or None
+                    valid = ", ".join(item.step_id for item in plan.revisions[-1].steps)
+                    raise ValueError(f"unknown plan step: {step_id}; valid: {valid}")
+                target = PlanStepStatus.COMPLETED if action == "complete_step" else PlanStepStatus.FAILED
+                if step.status == target:
+                    return envelope("noop")
+                if step.status in {PlanStepStatus.COMPLETED, PlanStepStatus.SKIPPED}:
+                    raise ValueError(f"step {step_id} is already {step.status.value}")
+                note_key = "note" if action == "complete_step" else "reason"
+                note = str(arguments.get(note_key, "")).strip() or None
                 evidence = list(arguments.get("evidence_execution_ids", []))
-                if status == "completed":
-                    if step.status != PlanStepStatus.IN_PROGRESS:
-                        raise ValueError("invalid plan step transition: completion requires in_progress")
+                if action == "complete_step":
                     if step.completion_policy == CompletionPolicy.SELF_ATTESTED and not note:
                         raise ValueError("self-attested completion requires a note")
                     if step.completion_policy == CompletionPolicy.EVIDENCE_REQUIRED:
                         if not evidence:
                             raise ValueError("evidence-required completion needs execution evidence")
-                        for evidence_id in evidence:
-                            found = self.runtime_state.executions.get(evidence_id)
+                        resolved_evidence = []
+                        for evidence_reference in evidence:
+                            evidence_id = self._resolve_execution_reference(evidence_reference)
+                            found = self.runtime_state.executions.get(evidence_id) if evidence_id else None
                             if found is None or found.session_id != self.runtime_state.session_id or found.status != ToolExecutionStatus.COMPLETED:
-                                raise ValueError(f"invalid evidence execution: {evidence_id}")
-                if status == "failed" and not note:
+                                valid = ", ".join(self._successful_execution_aliases())
+                                suffix = f"; valid successful aliases: {valid}" if valid else ""
+                                raise ValueError(
+                                    f"invalid evidence execution: {evidence_reference}{suffix}"
+                                )
+                            resolved_evidence.append(evidence_id)
+                        evidence = resolved_evidence
+                if action == "fail_step" and not note:
                     raise ValueError("failed plan step requires a reason")
-                if status == "in_progress":
-                    active = [item.step_id for item in plan.revisions[-1].steps if item.status == PlanStepStatus.IN_PROGRESS and item.step_id != step_id]
-                    if active:
-                        raise ValueError(f"only one plan step can be in_progress; active: {active[0]}")
+                active = [
+                    item.step_id for item in plan.revisions[-1].steps
+                    if item.status == PlanStepStatus.IN_PROGRESS and item.step_id != step_id
+                ]
+                if step.status != PlanStepStatus.IN_PROGRESS and active:
+                    raise ValueError(f"only one plan step can be in_progress; active: {active[0]}")
+                source = step.status.value
+                if step.status != PlanStepStatus.IN_PROGRESS:
+                    self._event(
+                        "PlanStepStarted", "plan", plan.plan_id,
+                        {"step_id": step_id}, turn_id=turn_id, causation_id=execution_id,
+                    )
                 self._event(
-                    event_type, "plan", plan.plan_id,
+                    "PlanStepCompleted" if action == "complete_step" else "PlanStepFailed",
+                    "plan", plan.plan_id,
                     {"step_id": step_id, "note": note, "evidence_execution_ids": evidence},
                     turn_id=turn_id, causation_id=execution_id,
                 )
-                return ToolResult(f"Set {step_id} to {status}", f"Plan step {step_id} is now {status}", True)
+                return envelope("applied", {step_id: {"from": source, "to": target.value}})
 
-            if action == "revise":
+            if action == "revise_plan":
                 reason = str(arguments.get("reason", "")).strip()
-                requested_steps = arguments.get("steps")
-                if not reason or not isinstance(requested_steps, list) or not requested_steps:
-                    raise ValueError("revise requires reason and steps")
+                patches = arguments.get("patches")
+                if not reason or not isinstance(patches, list) or not patches:
+                    raise ValueError("revise_plan requires reason and patches")
                 current = {step.step_id: step for step in plan.revisions[-1].steps}
                 new_steps = []
-                for index, item in enumerate(requested_steps, 1):
-                    step_id = item.get("step_id") or f"step_{index}"
-                    previous = current.get(step_id)
-                    required = bool(item.get("required", previous.required if previous else True))
-                    if previous and previous.required and not required:
+                patch_by_id = {}
+                for patch in patches:
+                    if not isinstance(patch, dict):
+                        raise ValueError("each plan patch must be an object")
+                    step_id = str(patch.get("step_id", "")).strip()
+                    if step_id not in current:
+                        raise ValueError(f"unknown plan step: {step_id}")
+                    if step_id in patch_by_id:
+                        raise ValueError(f"duplicate plan step ID: {step_id}")
+                    if set(patch) == {"step_id"}:
+                        raise ValueError("plan patch must change at least one field")
+                    patch_by_id[step_id] = patch
+                for step_id, previous in current.items():
+                    patch = patch_by_id.get(step_id, {})
+                    task = str(patch.get("task", previous.task)).strip()
+                    required = bool(patch.get("required", previous.required))
+                    if previous.required and not required:
                         raise ValueError("model cannot downgrade required work")
-                    if previous and previous.status in {PlanStepStatus.COMPLETED, PlanStepStatus.SKIPPED}:
-                        status = previous.status.value
-                        note = previous.note
-                        evidence = previous.evidence_execution_ids
-                    else:
-                        status = "pending"
-                        note = None
-                        evidence = []
+                    policy_value = patch.get("completion_policy", previous.completion_policy.value)
+                    try:
+                        completion_policy = CompletionPolicy(policy_value).value
+                    except ValueError as error:
+                        raise ValueError(f"invalid completion policy: {policy_value}") from error
                     new_steps.append({
                         "step_id": step_id,
-                        "task": str(item.get("task", previous.task if previous else "")).strip(),
-                        "status": status,
+                        "task": task,
+                        "status": previous.status.value,
                         "required": required,
-                        "completion_policy": (previous.completion_policy.value if previous else item.get("completion_policy", "self_attested")),
-                        "note": note,
-                        "evidence_execution_ids": list(evidence),
+                        "completion_policy": completion_policy,
+                        "note": previous.note,
+                        "evidence_execution_ids": list(previous.evidence_execution_ids),
                     })
-                missing_required = [step.step_id for step in current.values() if step.required and step.step_id not in {item["step_id"] for item in new_steps}]
-                if missing_required:
-                    raise ValueError("model cannot remove required work")
+                if all(
+                    item["task"] == current[item["step_id"]].task
+                    and item["required"] == current[item["step_id"]].required
+                    and item["completion_policy"] == current[item["step_id"]].completion_policy.value
+                    for item in new_steps
+                ):
+                    return envelope("noop")
                 self._event(
                     "PlanRevised", "plan", plan.plan_id,
                     {"from_revision": plan.active_revision, "to_revision": plan.active_revision + 1, "actor": "model", "reason": reason, "steps": new_steps},
                     turn_id=turn_id, causation_id=execution_id,
                 )
-                return ToolResult("Plan revised", f"Plan revised to revision {plan.active_revision + 1}", True)
+                return envelope("applied", {"plan_revision": {"from": plan.active_revision, "to": plan.active_revision + 1}})
             raise ValueError(f"unknown plan action: {action}")
         except (KeyError, TypeError, ValueError) as error:
-            return ToolResult(str(error), f"Error: {error}", False)
+            return envelope("rejected", error=str(error), success=False)
 
     def _execute_tool_call(self, tool_call) -> ToolResult:
         turn_id = self.runtime_state.active_turn_id

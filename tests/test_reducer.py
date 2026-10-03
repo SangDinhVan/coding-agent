@@ -17,10 +17,11 @@
 
 import copy
 import unittest
+import json
 
 from memory.event_store import JournalCorruptionError
 from runtime.models import PlanMode, ToolExecutionStatus, TurnStatus
-from runtime.reducer import completion_blockers, pending_runtime_actions, replay
+from runtime.reducer import completion_blockers, pending_runtime_actions, replay, runtime_prompt_projection
 
 
 def event(seq, event_type, aggregate_type, aggregate_id, payload=None, turn_id=None, session_id="s"):
@@ -125,6 +126,40 @@ class ReducerTests(unittest.TestCase):
         self.assertEqual(state.turns, {})
         self.assertEqual(state.executions, {})
         self.assertIsNone(state.active_turn_id)
+
+    def test_runtime_projection_is_versioned_authoritative_state_frame(self):
+        events = [
+            event(1, "TurnStarted", "turn", "t", {"goal": "g", "plan_mode": "optional"}, "t"),
+            event(2, "PlanCreated", "plan", "p", {"steps": [
+                {
+                    "step_id": "step_1",
+                    "task": "write file",
+                    "completion_policy": "evidence_required",
+                },
+                {"step_id": "step_2", "task": "review result", "required": False},
+            ]}, "t"),
+            event(3, "PlanStepStarted", "plan", "p", {"step_id": "step_1"}, "t"),
+        ]
+
+        projection = json.loads(runtime_prompt_projection(replay(events)))
+
+        self.assertEqual(projection["state_version"], 3)
+        self.assertEqual(projection["plan"]["revision"], 1)
+        self.assertEqual(projection["plan"]["steps"][0], {
+            "id": "step_1",
+            "task": "write file",
+            "status": "in_progress",
+            "required": True,
+            "completion_policy": "evidence_required",
+        })
+        self.assertEqual(projection["blockers"], ["step_1"])
+        self.assertEqual(projection["allowed_actions"], [
+            {"action": "complete_step", "step_id": "step_1", "requires_evidence": True},
+            {"action": "fail_step", "step_id": "step_1"},
+            {"action": "complete_step", "step_id": "step_2", "requires_evidence": False},
+            {"action": "fail_step", "step_id": "step_2"},
+            {"action": "revise_plan"},
+        ])
 
 
 if __name__ == "__main__":

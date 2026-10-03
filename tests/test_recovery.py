@@ -172,6 +172,8 @@ class BatchResumeTests(RecoveryTests):
         self.assertEqual(complete.call_count, 1)
         tool_messages = [m for m in agent.event_store.to_messages() if m["role"] == "tool"]
         self.assertEqual([m["tool_call_id"] for m in tool_messages], ["c1", "c2"])
+        self.assertEqual(tool_messages[0]["content"], "compact-ok\nExecution ID: exec_1")
+        self.assertEqual(tool_messages[1]["content"], "compact-ok\nExecution ID: exec_2")
 
     def test_persisted_final_completes_without_model_call(self):
         first = Agent(str(self.path), workdir=self.directory.name)
