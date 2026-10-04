@@ -34,11 +34,11 @@ def valid_checkpoint(**changes):
 class CompactionCheckpointTests(unittest.TestCase):
     def test_valid_checkpoint_round_trips_and_renders_deterministically(self):
         checkpoint = CompactionCheckpoint.from_dict(valid_checkpoint(), session_id="s", max_seq=20)
-        self.assertEqual(checkpoint.to_dict(), valid_checkpoint())
+        self.assertEqual(checkpoint.to_dict(), valid_checkpoint() | {'provenance_generation_ids': [], 'security_state_version': 0})
         self.assertEqual(checkpoint.to_message(), {
-            "role": "system",
+            "role": "user",
             "content": "[Compaction checkpoint]\n" + json.dumps(
-                valid_checkpoint(), ensure_ascii=False, sort_keys=True, separators=(",", ":")
+                checkpoint.to_dict(), ensure_ascii=False, sort_keys=True, separators=(",", ":")
             ),
         })
 

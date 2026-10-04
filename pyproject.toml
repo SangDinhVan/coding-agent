@@ -22,3 +22,6 @@ py-modules = ["main"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.data-files]
+"share/sang-coding-agent/helpers" = ["sandbox-image/sandbox_fs.py", "sandbox-image/sandbox_exec.py"]

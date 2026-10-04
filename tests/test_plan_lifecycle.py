@@ -1,3 +1,4 @@
+from tests.fakes import trusted_agent
 import json
 import tempfile
 import unittest
@@ -23,7 +24,7 @@ class FakeRegistry:
 
 class PlanTestCase(unittest.TestCase):
     def agent(self, directory, tool=None):
-        agent = Agent(
+        agent = trusted_agent(
             str(Path(directory) / "events.jsonl"),
             workdir=directory,
             tool_registry=FakeRegistry(tool),
@@ -138,6 +139,37 @@ class PlanLifecycleTests(PlanTestCase):
                 plan.revisions[-1].steps[0].status,
                 PlanStepStatus.COMPLETED,
             )
+
+    def test_rejected_completion_tells_model_which_steps_need_resolution(self):
+        with tempfile.TemporaryDirectory() as directory:
+            agent = self.agent(directory)
+            responses = iter([
+                stream_tool_call(
+                    "p1", "update_plan",
+                    '{"action":"create_plan","steps":[{"task":"work"}]}',
+                ),
+                stream_text("too early"),
+                stream_tool_call(
+                    "p2", "update_plan",
+                    '{"action":"complete_step","step_id":"step_1","note":"done"}',
+                ),
+                stream_text("finished"),
+            ])
+            frames = []
+
+            def complete(**kwargs):
+                frame = self.state_frame(kwargs["messages"])
+                frames.append(frame)
+                if len(frames) == 3:
+                    self.assertEqual(frame["completion_feedback"]["attempts"], 1)
+                    self.assertEqual(frame["completion_feedback"]["blockers"][0]["code"], "unfinished_required_steps")
+                    self.assertEqual(frame["completion_feedback"]["blockers"][0]["ids"], ["step_1"])
+                return next(responses)
+
+            with patch("agent.loop.llm.complete", side_effect=complete):
+                self.assertEqual(agent.run_turn("g", plan_mode=PlanMode.REQUIRED), "finished")
+            self.assertNotIn("completion_feedback", frames[-1])
+            self.assertIsNone(agent.turn_state.error)
 
     def test_evidence_requires_successful_execution(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -389,7 +421,7 @@ class PlanContextSynchronizationTests(PlanTestCase):
     def test_reopened_agent_uses_runtime_plan_as_source_of_truth(self):
         with tempfile.TemporaryDirectory() as directory:
             events_path = Path(directory) / "events.jsonl"
-            first = Agent(
+            first = trusted_agent(
                 str(events_path),
                 workdir=directory,
                 tool_registry=FakeRegistry(),
@@ -402,7 +434,7 @@ class PlanContextSynchronizationTests(PlanTestCase):
             self.execute_calls(first, turn_id, [create])
             first.close()
 
-            reopened = Agent(
+            reopened = trusted_agent(
                 str(events_path),
                 workdir=directory,
                 tool_registry=FakeRegistry(),
@@ -436,7 +468,7 @@ class PlanContextSynchronizationTests(PlanTestCase):
             self.assertTrue(any(
                 message.get("role") == "tool"
                 and message.get("tool_call_id") == "bad-plan"
-                and "no active plan" in message.get("content", "")
+                and "invalid_action" in message.get("content", "")
                 for message in messages
             ))
 

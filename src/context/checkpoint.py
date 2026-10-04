@@ -48,6 +48,8 @@ class CompactionCheckpoint:
     remaining_work: tuple[str, ...]
     critical_references: tuple[str, ...]
     verification: tuple[str, ...]
+    provenance_generation_ids: tuple[str, ...] = ()
+    security_state_version: int = 0
 
     @classmethod
     def from_dict(
@@ -57,7 +59,7 @@ class CompactionCheckpoint:
         session_id: str,
         max_seq: int,
     ) -> "CompactionCheckpoint":
-        if not isinstance(data, dict) or set(data) != _FIELDS:
+        if not isinstance(data, dict) or set(data) - {'provenance_generation_ids', 'security_state_version'} != _FIELDS:
             raise CheckpointCorruptionError("checkpoint fields do not match schema")
         if data["schema_version"] != SCHEMA_VERSION:
             raise CheckpointCorruptionError("unsupported checkpoint schema version")
@@ -70,6 +72,10 @@ class CompactionCheckpoint:
             if not isinstance(data[field], str):
                 raise CheckpointCorruptionError(f"checkpoint field {field} must be a string")
         converted = {}
+        provenance = data.get('provenance_generation_ids', [])
+        version = data.get('security_state_version', 0)
+        if not isinstance(provenance, list) or any(not isinstance(x, str) for x in provenance) or type(version) is not int or version < 0:
+            raise CheckpointCorruptionError('invalid security provenance')
         for field in _LIST_FIELDS:
             value = data[field]
             if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
@@ -81,6 +87,7 @@ class CompactionCheckpoint:
             covers_through_seq=sequence,
             created_at=data["created_at"],
             goal=data["goal"],
+            provenance_generation_ids=tuple(provenance), security_state_version=version,
             **converted,
         )
 
@@ -88,13 +95,14 @@ class CompactionCheckpoint:
         data = asdict(self)
         for field in _LIST_FIELDS:
             data[field] = list(data[field])
+        data['provenance_generation_ids'] = list(self.provenance_generation_ids)
         return data
 
     def to_message(self) -> dict:
         encoded = json.dumps(
             self.to_dict(), ensure_ascii=False, sort_keys=True, separators=(",", ":")
         )
-        return {"role": "system", "content": f"[Compaction checkpoint]\n{encoded}"}
+        return {"role": "user", "content": f"[Compaction checkpoint]\n{encoded}"}
 
 
 class CheckpointStore:

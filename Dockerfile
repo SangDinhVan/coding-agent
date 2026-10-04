@@ -14,6 +14,7 @@ COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
 WORKDIR /opt/coding-agent
 COPY pyproject.toml ./
 COPY src ./src
+COPY sandbox-image/sandbox_fs.py sandbox-image/sandbox_exec.py ./sandbox-image/
 RUN python -m pip install --no-cache-dir .
 COPY docker-entrypoint.sh /usr/local/bin/coding-agent-entrypoint
 RUN python -c 'from pathlib import Path; p = Path("/usr/local/bin/coding-agent-entrypoint"); p.write_bytes(p.read_bytes().replace(b"\r\n", b"\n"))' \

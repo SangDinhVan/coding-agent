@@ -8,13 +8,13 @@ from model import llm
 
 
 class LlmConfigurationTests(unittest.TestCase):
-    def test_complete_sets_finite_timeout_without_optional_retry_wrapper(self):
+    def test_complete_sets_finite_timeout_and_bounded_sdk_retries(self):
         client = Mock()
         client.chat.completions.create.return_value = "response"
         with patch("model.llm.OpenAI", return_value=client) as openai:
             self.assertEqual(llm.complete([{"role": "user", "content": "hi"}]), "response")
         self.assertEqual(openai.call_args.kwargs["timeout"], 120)
-        self.assertEqual(openai.call_args.kwargs["max_retries"], 0)
+        self.assertEqual(openai.call_args.kwargs["max_retries"], 2)
         request = client.chat.completions.create.call_args.kwargs
         self.assertEqual(request["model"], llm.MODEL)
         self.assertEqual(request["messages"], [{"role": "user", "content": "hi"}])
@@ -44,7 +44,7 @@ class LlmConfigurationTests(unittest.TestCase):
             api_key="test-key",
             base_url="https://example.test/v1",
             timeout=120,
-            max_retries=0,
+            max_retries=2,
         )
         request = client.chat.completions.create.call_args.kwargs
         self.assertEqual(request["tools"], tools)
@@ -52,8 +52,70 @@ class LlmConfigurationTests(unittest.TestCase):
         self.assertTrue(request["stream"])
         self.assertEqual(request["stream_options"], {"include_usage": True})
 
+    def test_timeout_before_response_retries_same_request(self):
+        import httpx
+        from openai import OpenAI
+        attempts = []
+
+        def respond(request):
+            attempts.append(request.content)
+            if len(attempts) == 1:
+                raise httpx.ReadTimeout('synthetic timeout', request=request)
+            return httpx.Response(200, json={
+                'id': 'test', 'object': 'chat.completion', 'created': 0, 'model': 'test',
+                'choices': [{'index': 0, 'finish_reason': 'stop',
+                             'message': {'role': 'assistant', 'content': 'done'}}],
+            })
+
+        client = httpx.Client(transport=httpx.MockTransport(respond))
+        self.addCleanup(client.close)
+        with patch('model.llm.OpenAI', side_effect=lambda **kw: OpenAI(**kw, http_client=client)), patch('openai._base_client.time.sleep'):
+            response = llm.complete([{'role': 'user', 'content': 'synthetic prompt'}],
+                                    api_key='test', base_url='https://example.test/v1')
+        self.assertEqual(response.choices[0].message.content, 'done')
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(attempts[0], attempts[1])
+
+    def test_timeout_after_stream_starts_does_not_replay_response(self):
+        import httpx
+        from openai import OpenAI
+        attempts = []
+
+        class InterruptedStream(httpx.SyncByteStream):
+            def __iter__(self):
+                yield b'data: {"id":"test","object":"chat.completion.chunk","created":0,"model":"test","choices":[{"index":0,"delta":{"content":"partial"}}]}\n\n'
+                raise httpx.ReadTimeout('synthetic stream timeout')
+
+        def respond(request):
+            attempts.append(request)
+            return httpx.Response(200, headers={'content-type': 'text/event-stream'}, stream=InterruptedStream())
+
+        client = httpx.Client(transport=httpx.MockTransport(respond))
+        self.addCleanup(client.close)
+        with patch('model.llm.OpenAI', side_effect=lambda **kw: OpenAI(**kw, http_client=client)):
+            response = llm.complete([{'role':'user','content':'synthetic prompt'}],
+                                    api_key='test', base_url='https://example.test/v1', stream=True)
+            self.assertEqual(next(response).choices[0].delta.content, 'partial')
+            with self.assertRaises(httpx.ReadTimeout):
+                list(response)
+        self.assertEqual(len(attempts), 1)
+
 
 class LlmTraceTests(unittest.TestCase):
+    def test_trace_refuses_symlink_parents_and_existing_linked_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            outside = root / 'outside'; outside.mkdir()
+            (root / 'link').symlink_to(outside, target_is_directory=True)
+            target = outside / 'target.txt'; target.write_text('keep')
+            (root / 'trace.txt').symlink_to(target)
+            for path in (root / 'link' / 'trace.txt', root / 'trace.txt'):
+                with self.subTest(path=path), self.assertRaises(OSError):
+                    llm.start_trace(path)
+                llm.finish_trace()
+            self.assertEqual(target.read_text(), 'keep')
+            self.assertFalse((outside / 'trace.txt').exists())
+
     def response(self, *, prompt_tokens=11, completion_tokens=7):
         return SimpleNamespace(
             choices=[SimpleNamespace(message=SimpleNamespace(content="done", tool_calls=None))],

@@ -103,6 +103,8 @@ class Compactor:
         budget: ContextBudget | None = None,
     ):
         self.model = model
+        self.disclosure_check = None
+        self.get_security_state = None
         self.budget = budget or ContextBudget(context_window=llm.get_context_window(model))
 
     def should_compact(self, messages: list[dict]) -> bool:
@@ -134,6 +136,7 @@ class Compactor:
         goal: str,
         compact_tool_call_ids: set[str] | None = None,
         omit_tool_call_ids: set[str] | None = None,
+        data_messages: list[dict] | None = None,
     ) -> CompactionResult:
         projected_records = self._project_records(
             message_records,
@@ -142,7 +145,8 @@ class Compactor:
         )
         covered = checkpoint.covers_through_seq if checkpoint else 0
         uncovered = [(seq, message) for seq, message in projected_records if seq > covered]
-        current = [system_message]
+        base_messages = [system_message, *(data_messages or [])]
+        current = base_messages[:]
         if checkpoint is not None:
             current.append(checkpoint.to_message())
         current.extend(message for _, message in uncovered)
@@ -158,7 +162,7 @@ class Compactor:
             return CompactionResult(current, checkpoint, False, before, before, 0, 0)
 
         groups = self._interaction_groups(uncovered)
-        retained = self._select_raw_suffix(groups, system_message, newest_user)
+        retained = self._select_raw_suffix(groups, base_messages, newest_user)
         prefix_count = len(groups) - len(retained)
         if prefix_count <= 0:
             raise ContextBudgetExceeded("context exceeds budget but has no compactable prefix")
@@ -175,7 +179,7 @@ class Compactor:
         if self._messages_tokens([new_checkpoint.to_message()]) > self.budget.checkpoint_max_tokens:
             raise CompactionError("generated checkpoint exceeds checkpoint token allowance")
 
-        rebuilt = [system_message, new_checkpoint.to_message()]
+        rebuilt = [*base_messages, new_checkpoint.to_message()]
         rebuilt.extend(message for seq, message in projected_records if seq > new_checkpoint.covers_through_seq)
         after = self._messages_tokens(rebuilt)
         if after > self.budget.available_input_tokens:
@@ -260,13 +264,13 @@ class Compactor:
     def _select_raw_suffix(
         self,
         groups: list[list[tuple[int, dict]]],
-        system_message: dict,
+        base_messages: list[dict],
         newest_user: tuple[int, dict] | None,
     ) -> list[list[tuple[int, dict]]]:
         raw_allowance = max(
             0,
             self.budget.available_input_tokens
-            - self._messages_tokens([system_message])
+            - self._messages_tokens(base_messages)
             - self.budget.checkpoint_max_tokens,
         )
         newest_seq = newest_user[0] if newest_user else None
@@ -322,7 +326,11 @@ class Compactor:
         summary_tokens = llm.count_tokens(prompt, self.model)
         started = time.monotonic()
         try:
-            response = llm.complete_text(prompt, model=self.model)
+            if self.disclosure_check:
+                self.disclosure_check(prompt, 'summarizer')
+            response = llm.complete_text(prompt, model=self.model, **({'disclosure_check': self.disclosure_check, 'disclosure_sink': 'summarizer'} if self.disclosure_check else {}))
+            if self.disclosure_check:
+                self.disclosure_check(response, 'summarizer')
             narrative = json.loads(response)
         except (json.JSONDecodeError, TypeError, ValueError) as error:
             raise CompactionError(f"compaction model returned invalid JSON: {error}") from error
@@ -338,6 +346,9 @@ class Compactor:
             "created_at": datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
             **narrative,
         }
+        if self.get_security_state:
+            state = self.get_security_state()
+            data.update(provenance_generation_ids=list(state.provenance_generation_ids), security_state_version=state.security_state_version)
         try:
             result = CompactionCheckpoint.from_dict(data, session_id=session_id, max_seq=max_seq)
         except CheckpointCorruptionError as error:

@@ -126,7 +126,9 @@ class DockerBackendTests(unittest.TestCase):
                 backend = DockerBackend(self.image, runner=runner)
                 backend.isolation_level = level
                 backend.create("session-1", "workspace-hash", Path(workspace), ResourceLimits())
-                calls.append(runner.calls[0][0])
+                calls.append(['io.sang-coding-agent.creation=<unique>'
+                              if item.startswith('io.sang-coding-agent.creation=') else item
+                              for item in runner.calls[0][0]])
         self.assertEqual(calls[0], calls[1])
         self.assertEqual(calls[1], calls[2])
 
@@ -313,7 +315,7 @@ class DockerBackendTests(unittest.TestCase):
         backend = DockerBackend(self.image, runner=runner)
         backend.container_id = "cid"
         with self.assertRaisesRegex(DockerTransportError, "malformed"):
-            backend.fs_call({"operation": "read", "path": "x"})
+            backend.fs_call({"operation": "read", "path": "x"}, grant={})
         self.assertEqual(runner.calls[1][0][:3], ["docker", "stop", "--time"])
         self.assertEqual(runner.calls[2][0], ["docker", "inspect", "cid"])
 
@@ -326,7 +328,7 @@ class DockerBackendTests(unittest.TestCase):
         backend = DockerBackend(self.image, runner=runner)
         backend.container_id = "cid"
         with self.assertRaisesRegex(DockerTransportError, "ambiguous"):
-            backend.fs_call({"operation": "read", "path": "x"})
+            backend.fs_call({"operation": "read", "path": "x"}, grant={})
         self.assertEqual(runner.calls[1][0][1], "stop")
 
     def test_helper_timeout_result_stops_whole_container(self):

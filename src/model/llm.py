@@ -1,5 +1,6 @@
 import json
 import os
+import stat
 from pathlib import Path
 
 from openai import OpenAI
@@ -12,14 +13,31 @@ _trace_path: Path | None = None
 _trace_call_number = 0
 
 
+def _open_trace(path, mode):
+    from core.paths import open_directory
+    parent = open_directory(path.parent, create=True)
+    try:
+        fd = os.open(path.name, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK,
+                     0o600, dir_fd=parent)
+    finally:
+        os.close(parent)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise OSError('unsafe_trace_file')
+        os.fchmod(fd, 0o600)
+        return os.fdopen(fd, mode, encoding='utf-8')
+    except BaseException:
+        os.close(fd)
+        raise
+
+
 def start_trace(path: str | Path) -> Path:
     global _trace_path, _trace_call_number
-    _trace_path = Path(path)
-    _trace_path.parent.mkdir(parents=True, exist_ok=True)
-    _trace_path.touch(mode=0o600, exist_ok=True)
-    _trace_path.chmod(0o600)
-    with _trace_path.open(encoding="utf-8") as trace:
+    path = Path(path)
+    with _open_trace(path, 'r') as trace:
         _trace_call_number = sum(line.startswith("lần gọi thứ:") for line in trace)
+    _trace_path = path
     return _trace_path
 
 
@@ -29,6 +47,25 @@ def finish_trace() -> Path | None:
     _trace_path = None
     _trace_call_number = 0
     return path
+
+
+def append_trace_event(event: str, fields: dict, disclosure_check=None) -> None:
+    if _trace_path is None:
+        return
+    from runtime.safety import DisclosureDenied, screen_artifact
+
+    block = '[runtime] ' + json.dumps({'event': event, **fields}, ensure_ascii=False) + '\n'
+    if screen_artifact(block, '', (API_KEY,))['secret_exposure_detected']:
+        return
+    if disclosure_check:
+        try:
+            disclosure_check(block, 'trace')
+        except DisclosureDenied:
+            return
+    with _open_trace(_trace_path, 'a') as trace:
+        trace.write(block)
+        trace.flush()
+        os.fsync(trace.fileno())
 
 
 def _usage_tokens(usage) -> tuple[int | None, int | None]:
@@ -44,9 +81,11 @@ def _usage_tokens(usage) -> tuple[int | None, int | None]:
     return input_tokens, output_tokens
 
 
-def _append_trace(call_number: int, request: dict, output_text: str, usage) -> None:
+def _append_trace(call_number: int, request: dict, output_text: str, usage, disclosure_check=None) -> None:
     if _trace_path is None:
         return
+    if disclosure_check:
+        disclosure_check(json.dumps({'request': request, 'output': output_text}, ensure_ascii=False), 'trace')
     provider_input, provider_output = _usage_tokens(usage)
     input_tokens = provider_input
     input_source = "provider"
@@ -65,7 +104,7 @@ def _append_trace(call_number: int, request: dict, output_text: str, usage) -> N
         "context:\n"
         f"{json.dumps(request, ensure_ascii=False, indent=2, default=str)}\n\n"
     )
-    with _trace_path.open("a", encoding="utf-8") as trace:
+    with _open_trace(_trace_path, 'a') as trace:
         trace.write(block)
         trace.flush()
         os.fsync(trace.fileno())
@@ -79,9 +118,10 @@ def _next_trace_call() -> int | None:
     return _trace_call_number
 
 
-def _trace_stream(response, call_number: int, request: dict):
+def _trace_stream(response, call_number: int | None, request: dict, disclosure_check=None):
     output = []
     usage = None
+    total = 0
     try:
         for chunk in response:
             chunk_usage = getattr(chunk, "usage", None)
@@ -105,9 +145,13 @@ def _trace_stream(response, call_number: int, request: dict):
                             getattr(function, "name", None) or "",
                             getattr(function, "arguments", None) or "",
                         ))
+            total = sum(len(text.encode()) for text in output)
+            if total > 32 * 1024**2:
+                raise RuntimeError('model_output_limit')
             yield chunk
     finally:
-        _append_trace(call_number, request, "".join(output), usage)
+        if call_number is not None:
+            _append_trace(call_number, request, "".join(output), usage, disclosure_check)
 
 
 def get_context_window(model: str = None) -> int:
@@ -121,13 +165,15 @@ def complete(
     base_url: str = None,
     api_key: str = None,
     stream: bool = False,
+    disclosure_check=None,
+    disclosure_sink='main_model',
     **kwargs,
 ):
     client_options = {
         "api_key": api_key or API_KEY,
         "base_url": base_url or BASE_URL,
         "timeout": kwargs.pop("timeout", 120),
-        "max_retries": kwargs.pop("max_retries", 0),
+        "max_retries": kwargs.pop("max_retries", 2),
     }
 
     request = {
@@ -141,26 +187,33 @@ def complete(
     if tools is not None:
         request["tools"] = tools
 
+    if disclosure_check:
+        disclosure_check(json.dumps(request, ensure_ascii=False), disclosure_sink)
     call_number = _next_trace_call()
     try:
         response = OpenAI(**client_options).chat.completions.create(**request)
-    except BaseException:
+    except BaseException as error:
+        if disclosure_check:
+            disclosure_check(str(error), 'audit_text')
         if call_number is not None:
-            _append_trace(call_number, request, "", None)
+            _append_trace(call_number, request, "", None, disclosure_check)
         raise
-    if call_number is None:
-        return response
     if stream:
-        return _trace_stream(response, call_number, request)
+        return _trace_stream(response, call_number, request, disclosure_check)
+    if call_number is None and disclosure_check is None:
+        return response
     message = response.choices[0].message
     output = content_to_text(message.content or "")
     if getattr(message, "tool_calls", None):
         output += str(message.tool_calls)
-    _append_trace(call_number, request, output, getattr(response, "usage", None))
+    if disclosure_check:
+        disclosure_check(output, disclosure_sink)
+    if call_number is not None:
+        _append_trace(call_number, request, output, getattr(response, "usage", None), disclosure_check)
     return response
 
 
-def complete_text(prompt: str, model: str = None, base_url: str = None, api_key: str = None) -> str:
+def complete_text(prompt: str, model: str = None, base_url: str = None, api_key: str = None, **kwargs) -> str:
 
     response = complete(
         messages=[{"role": "user", "content": prompt}],
@@ -168,6 +221,7 @@ def complete_text(prompt: str, model: str = None, base_url: str = None, api_key:
         stream=False,
         base_url=base_url,
         api_key=api_key,
+        **kwargs,
     )
     return response.choices[0].message.content or ""
 

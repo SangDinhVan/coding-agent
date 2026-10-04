@@ -39,6 +39,7 @@ class ResourceLimits:
     memory_bytes: int = 2 * 1024**3
     pids: int = 256
     tmpfs_bytes: int = 512 * 1024**2
+    tmpfs_inodes: int = 10000
     tool_timeout_seconds: int = 60
     output_bytes: int = 10 * 1024**2
     workspace_growth_bytes: int = 4 * 1024**3
@@ -49,6 +50,7 @@ class ResourceLimits:
             (0 < self.memory_bytes <= 4 * 1024**3, "memory limit must be in (0, 4 GiB]"),
             (0 < self.pids <= 512, "PIDs limit must be in (0, 512]"),
             (0 < self.tmpfs_bytes <= 1024**3, "tmpfs limit must be in (0, 1 GiB]"),
+            (0 < self.tmpfs_inodes <= 10000, "tmpfs inode limit must be in (0, 10000]"),
             (0 < self.tool_timeout_seconds <= 600, "timeout must be in (0, 600 seconds]"),
             (0 < self.output_bytes <= 10 * 1024**2, "output limit must be in (0, 10 MiB]"),
             (0 < self.workspace_growth_bytes <= 8 * 1024**3, "workspace growth limit must be in (0, 8 GiB]"),
@@ -116,6 +118,10 @@ class SandboxResult:
     container_id: str
     image_digest: str
     truncated: bool = False
+    process_outcome: str = 'unknown'
+    enforcement_observation: str = 'unknown'
+    effect_state: str = 'unknown'
+    quiescent: bool = False
 
     @property
     def success(self):

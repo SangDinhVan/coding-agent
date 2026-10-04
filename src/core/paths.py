@@ -9,6 +9,32 @@ from pathlib import Path
 _SESSION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
+def open_directory(path, *, create=False):
+    """Open an absolute directory without following links in any component."""
+    path = Path(path).absolute()
+    fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for part in path.parts[1:]:
+            if part in {'.', '..'}:
+                raise ValueError('unsafe_directory_path')
+            try:
+                child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            except FileNotFoundError:
+                if not create:
+                    raise
+                try:
+                    os.mkdir(part, mode=0o700, dir_fd=fd)
+                except FileExistsError:
+                    pass
+                child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = child
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
 def workspace_identity(source_workspace: str | Path) -> str:
     source = Path(source_workspace).resolve(strict=True)
     if not source.is_dir():
@@ -43,6 +69,8 @@ class ControlPaths:
     mask_file: Path
     mask_directory: Path
     workspace_identity: str
+    generations: Path
+    checkpoints: Path
 
     @staticmethod
     def default_root() -> Path:
@@ -56,6 +84,8 @@ class ControlPaths:
         source = Path(source_workspace).resolve(strict=True)
         identity = workspace_identity(source)
         root_path = Path(root).expanduser().resolve()
+        if root_path.is_relative_to(source) or source.is_relative_to(root_path):
+            raise ValueError('source/state root overlap')
         session_dir = root_path / "sandboxes" / session_id
         for directory in (root_path, root_path / "sandboxes", session_dir):
             directory.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -86,4 +116,6 @@ class ControlPaths:
             mask_file=mask_file,
             mask_directory=mask_directory,
             workspace_identity=identity,
+            generations=session_dir / 'generations',
+            checkpoints=session_dir / 'checkpoints',
         )

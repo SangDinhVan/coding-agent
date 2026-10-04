@@ -154,6 +154,7 @@ class ReducerTests(unittest.TestCase):
         })
         self.assertEqual(projection["blockers"], ["step_1"])
         self.assertEqual(projection["allowed_actions"], [
+            {"action": "read"}, {"action": "write"}, {"action": "edit"}, {"action": "bash"},
             {"action": "complete_step", "step_id": "step_1", "requires_evidence": True},
             {"action": "fail_step", "step_id": "step_1"},
             {"action": "complete_step", "step_id": "step_2", "requires_evidence": False},

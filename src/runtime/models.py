@@ -49,6 +49,7 @@ class ReplayPolicy(str, Enum):
 
 class PolicyDecision(str, Enum):
     ALLOW = "allow"
+    REVIEW = "review"
     ASK = "ask"
     DENY = "deny"
 
@@ -120,6 +121,7 @@ class ApprovalMetadata:
     approved_by: str
     timestamp: str
     note: str | None = None
+    binding_digest: str | None = None
 
 
 @dataclass(frozen=True)
@@ -128,6 +130,8 @@ class ApprovalRequest:
     tool_name: str
     arguments: dict[str, Any]
     reason: str
+    binding_digest: str | None = None
+    facts: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -226,6 +230,30 @@ class ToolExecution:
     error: ErrorRecord | None = None
     retry_of_execution_id: str | None = None
     recovery_metadata: dict[str, Any] = field(default_factory=dict)
+    authorization: dict[str, Any] = field(default_factory=dict)
+    approval_binding_digest: str | None = None
+    grant_claimed: bool = False
+    requested_seq: int = 0
+
+
+@dataclass
+class SecurityState:
+    untrusted_content_seen: bool = False
+    agent_modified_content: bool = False
+    injection_flags: tuple[str, ...] = ()
+    secret_exposure_detected: bool = False
+    provenance_generation_ids: tuple[str, ...] = ()
+    security_state_version: int = 0
+
+    def merge(self, annotations):
+        for name in ('untrusted_content_seen', 'agent_modified_content', 'secret_exposure_detected'):
+            setattr(self, name, getattr(self, name) or annotations.get(name) is True)
+        for name in ('injection_flags', 'provenance_generation_ids'):
+            values = annotations.get(name, ())
+            if not isinstance(values, (list, tuple)) or any(not isinstance(value, str) for value in values):
+                raise ValueError('invalid_security_annotations')
+            setattr(self, name, tuple(sorted(set(getattr(self, name)) | set(values))))
+        self.security_state_version += 1
 
 
 @dataclass
@@ -237,3 +265,5 @@ class RuntimeState:
     executions: dict[str, ToolExecution] = field(default_factory=dict)
     active_turn_id: str | None = None
     active_plan_id: str | None = None
+    safety_constraints: dict[str, list[str]] = field(default_factory=dict)
+    security_state: SecurityState = field(default_factory=SecurityState)

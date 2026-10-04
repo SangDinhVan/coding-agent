@@ -37,6 +37,12 @@ class WorkspaceSnapshotTests(unittest.TestCase):
         self.assertFalse((self.paths.workspace / "nested/client_credentials_prod.json").exists())
         self.assertEqual({x.reason for x in manifest.excluded}, {"hard_security_denylist"})
 
+    def test_trace_logs_are_excluded_without_project_gitignore(self):
+        self.write('.llm-traces/session/turn.txt', 'previous context')
+        self.write('main.py', 'print(1)')
+        self.snapshot()
+        self.assertFalse((self.paths.workspace / '.llm-traces').exists())
+
     def test_agentignore_is_additive_and_negation_fails_closed(self):
         self.write("private/internal.cfg", "private")
         self.write(".agentignore", "private/\n")
@@ -65,13 +71,11 @@ class WorkspaceSnapshotTests(unittest.TestCase):
         with self.assertRaisesRegex(SnapshotError, "symlink"):
             self.snapshot()
 
-    def test_safe_relative_symlink_is_preserved_without_dereference(self):
+    def test_relative_symlink_is_rejected(self):
         self.write("pkg/target.txt", "target")
         (self.source / "pkg/link.txt").symlink_to("target.txt")
-        self.snapshot()
-        copied = self.paths.workspace / "pkg/link.txt"
-        self.assertTrue(copied.is_symlink())
-        self.assertEqual(os.readlink(copied), "target.txt")
+        with self.assertRaisesRegex(SnapshotError, 'symlink'):
+            self.snapshot()
 
     def test_fifo_rejects_snapshot(self):
         os.mkfifo(self.source / "pipe")
@@ -80,12 +84,12 @@ class WorkspaceSnapshotTests(unittest.TestCase):
 
     def test_regular_files_are_independent_hashed_and_modes_sanitized(self):
         original = self.write("script.py", "print(1)")
-        original.chmod(0o4755)
+        original.chmod(0o755)
         manifest = self.snapshot()
         copied = self.paths.workspace / "script.py"
         self.assertNotEqual(original.stat().st_ino, copied.stat().st_ino)
-        self.assertEqual(copied.stat().st_mode & 0o7777, 0o777)
-        self.assertEqual(self.paths.workspace.stat().st_mode & 0o7777, 0o777)
+        self.assertEqual(copied.stat().st_mode & 0o7777, 0o755)
+        self.assertEqual(self.paths.workspace.stat().st_mode & 0o7777, 0o755)
         entry = next(x for x in manifest.included if str(x.path) == "script.py")
         self.assertEqual(entry.mode, 0o755)
         self.assertEqual(len(entry.sha256), 64)

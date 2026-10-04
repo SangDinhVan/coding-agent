@@ -6,6 +6,7 @@ import fcntl
 import json
 import os
 import shutil
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, Optional
@@ -134,6 +135,7 @@ class EventStore:
         self.runtime_instance_id = runtime_instance_id or str(uuid4())
         self._writer = writer
         self._file = None
+        self.disclosure_check = None
         if writer:
             self._file = self.path.open("a+", encoding="utf-8")
             try:
@@ -198,6 +200,11 @@ class EventStore:
     ) -> dict:
         if self._file is None:
             raise JournalError("journal is not open for writing")
+        if self.disclosure_check and event_type != 'SecurityStateUpdated':
+            try:
+                self.disclosure_check(json.dumps(payload, ensure_ascii=False), 'audit_text')
+            except Exception:
+                payload = _strip_disclosure_text(payload)
         event = {
             "schema_version": SCHEMA_VERSION,
             "event_id": str(uuid4()),
@@ -331,3 +338,28 @@ class EventStore:
 
     def to_messages(self) -> list[dict]:
         return [message for _, message in self.message_records()]
+
+
+def _strip_disclosure_text(value, key=None):
+    if key == 'metadata':
+        return {}
+    if key in {'content', 'raw', 'compact', 'message', 'goal', 'final_text', 'note', 'task', 'parse_error', 'preview'}:
+        return 'disclosure_denied' if value is not None else None
+    if key == 'arguments':
+        return {} if isinstance(value, dict) else '{}'
+    if key == 'tool_calls':
+        return [{**item, 'function': {**item.get('function', {}), 'arguments': '{}'}} for item in value]
+    if isinstance(value, dict):
+        return {name: _strip_disclosure_text(item, name) for name, item in value.items()}
+    if isinstance(value, list):
+        return [_strip_disclosure_text(item) for item in value]
+    if isinstance(value, str):
+        safe_values = {'read', 'write', 'edit', 'bash', 'update_plan', 'fake', 'manual', 'replay_safe', 'reconcilable',
+            'allow', 'ask', 'review', 'deny', 'success', 'runtime_error', 'timed_out', 'unknown', 'read_only',
+            'ask_all', 'ask_on_escalation', 'auto_review', 'interactive', 'headless', 'shadow', 'user',
+            'optional', 'required', 'pending', 'in_progress', 'completed', 'failed', 'skipped', 'self_attested', 'evidence_required',
+            'disclosure_denied', 'human_approval_unavailable', 'security_state_blocked', 'authorization_changed'}
+        if value in safe_values or re.fullmatch(r'(?:sha256:)?[a-f0-9]{64}|[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', value):
+            return value
+        return 'disclosure_denied'
+    return value

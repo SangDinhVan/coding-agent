@@ -180,7 +180,7 @@ class CompactorTests(unittest.TestCase):
             context_window=100, checkpoint_max_tokens=20, recent_user_max_tokens=5
         )
         result, _ = self.build(records, budget=budget)
-        raw_users = [message["content"] for message in result.messages if message["role"] == "user"]
+        raw_users = [message["content"] for message in result.messages if message["role"] == "user" and not message['content'].startswith('[Compaction checkpoint]')]
         self.assertEqual(raw_users[-1], "cccc")
         self.assertLessEqual(sum(len(value) for value in raw_users[:-1]), 5)
 

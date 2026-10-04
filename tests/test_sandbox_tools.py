@@ -22,6 +22,12 @@ class FakeSandbox:
         return SandboxResult(ExecutionStatus.SUCCESS, "ok", "", 0, ViolationStatus.UNKNOWN, "s1", "cid", "image@sha256:" + "a" * 64)
 
 
+def authorized_bash(sandbox):
+    tool = BashTool(sandbox)
+    tool._execution_id = 'trusted-test-execution'
+    return tool
+
+
 class SandboxToolTests(unittest.TestCase):
     def test_unbound_side_effect_tools_fail_closed(self):
         for tool, kwargs in (
@@ -46,7 +52,7 @@ class SandboxToolTests(unittest.TestCase):
     def test_bash_only_delegates_to_sandbox(self):
         sandbox = FakeSandbox()
         self.assertFalse(hasattr(terminal_module, "subprocess"))
-        result = BashTool(sandbox).run(command="echo ok")
+        result = authorized_bash(sandbox).run(command="echo ok")
         self.assertTrue(result.success)
         self.assertEqual(result.exit_code, 0)
         self.assertEqual(sandbox.calls[0][0], "exec")
@@ -55,7 +61,7 @@ class SandboxToolTests(unittest.TestCase):
     def test_bash_records_declared_verification_kind(self):
         sandbox = FakeSandbox()
 
-        result = BashTool(sandbox).run(
+        result = authorized_bash(sandbox).run(
             command="python -m unittest",
             verification_kind="behavioral",
         )
@@ -74,7 +80,7 @@ class SandboxToolTests(unittest.TestCase):
     def test_bash_rejects_unknown_verification_kind(self):
         sandbox = FakeSandbox()
 
-        result = BashTool(sandbox).run(
+        result = authorized_bash(sandbox).run(
             command="echo ok",
             verification_kind="looks-good",
         )
@@ -96,7 +102,7 @@ class SandboxToolTests(unittest.TestCase):
             "image@sha256:" + "a" * 64,
         )
 
-        result = BashTool(sandbox).run(
+        result = authorized_bash(sandbox).run(
             command="python check.py | head; printf done",
             verification_kind="structural",
         )

@@ -1,8 +1,10 @@
 # Safety implementation design
 
 Date: 2026-10-04.
-Status: User approved on 2026-10-04; four implementation plans are ready for
-review and execution-method selection. Product implementation has not started.
+Status: S1-S4 implementation is present in the code-safety worktree.
+Supported profile evidence and explicit limitations are recorded in
+[safety acceptance](../safety-acceptance.md); final review governs integration.
+Declassification is unavailable; security flags remain monotonic.
 Requirements: [safety.md](../../safety.md).
 Previous investigation: [safety redesign](2026-10-03-safety-redesign.md).
 
@@ -36,6 +38,7 @@ the user has already approved these implementation details.
 | Interaction | Interactive REPL by default; explicit `--headless` never prompts or creates new WAITING_APPROVAL state. |
 | Source disclosure | User selects the admitted source tree and authorizes its ordinary contents for the configured model provider and local approval UI. Hard private exclusions remain; `.agentignore` only narrows admission. Approval metadata stores a selection digest. |
 | Execution content | Bind the complete sealed generation for opaque execution. Use trusted structural analysis for Reviewer facts; incomplete analysis requires human review of sealed content. Missing enforcement always denies. |
+| Opaque disclosure preflight | Before approval routing, screen the complete sealed input in the trusted controller. Non-disclosable or unavailable inputs cancel only that action without recording a secret exposure, because no raw content has left the controller. The model receives a fixed reason and may continue through bounded file tools. Actual secret-bearing reads/outputs retain the monotonic disclosure block. |
 | Storage | Start with bounded file adapters and read-only execution inputs, bounded temporary storage, and bounded harvest. Writable opaque execution requires separately verified hard byte/inode quotas; the existing watchdog is only an observation mechanism. |
 | Trusted image | Use a locally present pinned image digest. Do not build the trusted image from the agent-editable project during startup. |
 | External effects | No network, package-fetch, external MCP, email, push, or API mutation broker in this implementation. Hard DENY. |
@@ -224,8 +227,15 @@ evidence of safety, and missing observations are UNKNOWN.
 
 Export a digest-bound patch to a pre-authorized safe sink using no-follow/beneath
 handling. Never invoke hooks/filters/builds to generate or inspect a patch.
-No automatic project writes. Host publication/writer coordination and guarded
-multi-file recovery belong to a later separately approved design. Private
+The user-authorized visible-file flow publishes each permitted write/edit to
+the selected source through the controller. Publication capability is part of
+the action binding; source before-image and parent identities are checkpointed
+before effects and rechecked under the controller writer lock. The destination
+appears in human preview and tool results. No shell/whole-task publication is
+granted. Legacy sessions retain private-only effects. Source conflicts deny before
+writing; unknown publication quarantines both effects and requires manual recovery.
+External writers must not save the same path concurrently; this does not claim
+kernel-enforced exclusion of arbitrary host processes. Private
 recovery restores only when expected-after evidence and writer exclusion hold;
 otherwise keep backups and require reconciliation. No automatic retry after
 post-effects audit/transport failure.
@@ -242,7 +252,7 @@ Order is a dependency chain, not parallel independent implementation.
 | S3: Disposable RO execution | `sandbox/docker.py`, `sandbox/session.py`, `sandbox_exec.py`, trusted image/startup files; action lifetime, pinned image, RO generation, bounded resources | Physical descendant, mounts/env, network, quota and transport/quarantine tests; RO inspection/test workflows supported with documented write limitations. |
 | S4: Disclosure and sealed export | `memory/event_store.py`, `memory/manager.py`, `context/checkpoint.py`, `context/compactor.py`, `model/llm.py`, `agent/loop.py`, `sandbox/changes.py`; shared state/provenance, pre-sink gate, safe trace and export | Canary/injection/compact/resume/batch/export tests; usable safe CLI accepted only after S1-S4 gates pass. |
 
-Writable arbitrary execution, automatic host publication, standing approvals,
+Writable arbitrary execution, whole-task host publication, standing approvals,
 SLM migration and external brokers remain separate projects. Their absence must
 be shown as unavailable capability, never hidden by approval or mock evidence.
 

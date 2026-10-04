@@ -20,6 +20,14 @@ class _SandboxFileTool(BaseTool):
     def recovery_fingerprint(self, metadata):
         return self.sandbox.fingerprint(metadata["path"]) if self.sandbox else None
 
+    def recovery_state_fingerprint(self, metadata):
+        return self.sandbox.recovery_state_fingerprint(metadata['path']) if self.sandbox else None
+
+    def authorize_runtime(self, action, binding):
+        if self.sandbox is None:
+            raise RuntimeError('sandbox unavailable')
+        self.sandbox.authorize_file_action(action, binding)
+
     def _call(self, request):
         if self.sandbox is None:
             return None, _unbound(self.name)
@@ -56,12 +64,15 @@ class WriteTool(_SandboxFileTool):
 
     def recovery_metadata(self, path: str, content: str, **kwargs):
         before = self.sandbox.fingerprint(path) if self.sandbox else None
-        return {"path": path, "before_hash": before or "__missing__", "expected_after_hash": _hash_bytes(content.encode())}
+        states = self.sandbox.recovery_states('write', {'path': path, 'content': content}) if self.sandbox and hasattr(self.sandbox, 'recovery_states') else {}
+        return {"path": path, "before_hash": before or "__missing__", "expected_after_hash": _hash_bytes(content.encode()), **states}
 
     def execute(self, path: str, content: str, **kwargs):
         data, error = self._call({"operation": "write", "path": path, "content": content})
         if error: return error
-        return ToolResult(f"Wrote {path}", f"Successfully wrote {path}", True, metadata={"sandbox_status": data["status"], "sha256": data.get("sha256")})
+        destination = data.get('published_path')
+        message = f"Wrote {path} in project: {destination}" if destination else f"Wrote {path} in private workspace"
+        return ToolResult(message, message, True, metadata={"sandbox_status": data["status"], "sha256": data.get("sha256"), 'published_path': destination})
 
 
 class EditTool(_SandboxFileTool):
@@ -71,9 +82,12 @@ class EditTool(_SandboxFileTool):
     parameters = {"type": "object", "properties": {"path": {"type": "string"}, "old_string": {"type": "string"}, "new_string": {"type": "string"}}, "required": ["path", "old_string", "new_string"]}
 
     def recovery_metadata(self, path: str, old_string: str, new_string: str, **kwargs):
-        return {"path": path, "before_hash": self.sandbox.fingerprint(path) if self.sandbox else None}
+        states = self.sandbox.recovery_states('edit', {'path': path, 'old_string': old_string, 'new_string': new_string}) if self.sandbox and hasattr(self.sandbox, 'recovery_states') else {}
+        return {"path": path, "before_hash": self.sandbox.fingerprint(path) if self.sandbox else None, **states}
 
     def execute(self, path: str, old_string: str, new_string: str, **kwargs):
         data, error = self._call({"operation": "edit", "path": path, "old_string": old_string, "new_string": new_string})
         if error: return error
-        return ToolResult(f"Edited {path}", f"Successfully edited {path}", True, metadata={"sandbox_status": data["status"], "sha256": data.get("sha256")})
+        destination = data.get('published_path')
+        message = f"Edited {path} in project: {destination}" if destination else f"Edited {path} in private workspace"
+        return ToolResult(message, message, True, metadata={"sandbox_status": data["status"], "sha256": data.get("sha256"), 'published_path': destination})

@@ -89,7 +89,9 @@ def _preview(before: bytes, after: bytes, path: str) -> tuple[str, str | None]:
     return "text", "\n".join(diff)
 
 
-def build_changeset(paths, *, max_file_bytes=MAX_FILE_BYTES, max_total_bytes=MAX_TOTAL_BYTES, max_entries=MAX_ENTRIES) -> ChangeSet:
+def build_changeset(paths, *, max_file_bytes=MAX_FILE_BYTES, max_total_bytes=MAX_TOTAL_BYTES, max_entries=MAX_ENTRIES, before_generation=None, current_generation=None, quiescent=False) -> ChangeSet:
+    if before_generation is not None or current_generation is not None:
+        return _generation_changes(paths, before_generation, current_generation, quiescent)
     baseline = _load_baseline(paths.baseline_manifest)
     final = _scan(paths.workspace, max_file_bytes=max_file_bytes)
     changes, violations, changed_bytes = [], [], 0
@@ -129,6 +131,124 @@ def build_changeset(paths, *, max_file_bytes=MAX_FILE_BYTES, max_total_bytes=MAX
     result = ChangeSet(changes_tuple, violations_tuple, digest, final_hash, not violations)
     _persist_changeset(paths, result, manifest_payload)
     return result
+
+
+def _text_patch(before, after, path, operation, before_mode, after_mode):
+    if any(character in path for character in ('\n', '\r', '\t', '"', '\\')):
+        raise ChangeSetError('unsupported_patch_path')
+    try:
+        old, new = before.decode('utf-8'), after.decode('utf-8')
+    except UnicodeDecodeError:
+        raise ChangeSetError('unsupported_patch_encoding') from None
+    if '\x00' in old or '\x00' in new:
+        raise ChangeSetError('unsupported_binary_patch')
+    lines = [f'diff --git a/{path} b/{path}\n']
+    if operation == 'create':
+        lines.append(f'new file mode 100{after_mode:03o}\n')
+    elif operation == 'delete':
+        lines.append(f'deleted file mode 100{before_mode:03o}\n')
+    elif before_mode != after_mode:
+        lines.extend((f'old mode 100{before_mode:03o}\n', f'new mode 100{after_mode:03o}\n'))
+    diff = difflib.unified_diff(old.splitlines(keepends=True), new.splitlines(keepends=True),
+        fromfile='/dev/null' if operation == 'create' else 'a/' + path,
+        tofile='/dev/null' if operation == 'delete' else 'b/' + path)
+    for line in diff:
+        lines.append(line if line.endswith('\n') else line + '\n\\ No newline at end of file\n')
+    return ''.join(lines)
+
+
+def _generation_changes(paths, before_generation, current_generation, quiescent):
+    from sandbox.generations import verify_generation
+    if not quiescent:
+        raise ChangeSetError('quiescence_required')
+    if before_generation is None or current_generation is None or not verify_generation(before_generation) or not verify_generation(current_generation):
+        raise ChangeSetError('invalid_generation')
+    before = {str(item.path): item for item in before_generation.manifest}
+    after = {str(item.path): item for item in current_generation.manifest}
+    entries, violations = [], []
+    for name in sorted(set(before) | set(after)):
+        old, new = before.get(name), after.get(name)
+        if old == new:
+            continue
+        if (old and old.kind == 'directory') or (new and new.kind == 'directory'):
+            if old and new and old.kind != new.kind:
+                raise ChangeSetError('unsupported_type_change')
+            # Standard patches create parent directories as needed; empty directories have no representation.
+            tree = after if new else before
+            if not any(path.startswith(name + '/') and item.kind == 'file' for path, item in tree.items()):
+                raise ChangeSetError('unsupported_empty_directory_patch')
+            continue
+        operation = 'create' if old is None else 'delete' if new is None else 'modify'
+        old_bytes = (before_generation.directory / name).read_bytes() if old else b''
+        new_bytes = (current_generation.directory / name).read_bytes() if new else b''
+        preview = _text_patch(old_bytes, new_bytes, name, operation, old.mode if old else None, new.mode if new else None)
+        if _matches(name, _HARD_PATTERNS):
+            violations.append('protected_path')
+        entries.append(ChangeEntry(SandboxPath(name), operation, 'text', old.sha256 if old else None, new.sha256 if new else None,
+                                  old.mode if old else None, new.mode if new else None, new.size if new else 0, preview))
+    entries, violations = tuple(entries), tuple(violations)
+    digest = None if violations else _hash(_canonical(entries, violations, current_generation.digest))
+    result = ChangeSet(entries, violations, digest, current_generation.digest, not violations)
+    _persist_changeset(paths, result, [{'path': str(item.path), **asdict(item)} for item in current_generation.manifest])
+    return result
+
+
+def patch_text(changes):
+    if not changes.approvable or not changes.change_set_hash:
+        raise ChangeSetError('patch_not_approvable')
+    if _hash(_canonical(changes.entries, changes.violations, changes.final_manifest_hash)) != changes.change_set_hash:
+        raise ChangeSetError('patch_digest_changed')
+    if any(item.kind != 'text' or item.preview is None or not item.preview.startswith('diff --git ') for item in changes.entries):
+        raise ChangeSetError('sealed_generation_patch_required')
+    return ''.join(item.preview for item in changes.entries)
+
+
+def _open_export_directory(root):
+    root = Path(root)
+    if not root.is_absolute():
+        raise ChangeSetError('absolute_export_root_required')
+    from core.paths import open_directory
+    return open_directory(root)
+
+
+def export_patch(paths, changes, approved_digest, export_root, relative_name, disclosure_gate):
+    from runtime.safety import canonical_path
+    if not callable(disclosure_gate) or export_root is None:
+        raise ChangeSetError('missing_export_authority')
+    name = canonical_path(relative_name)
+    if approved_digest != changes.change_set_hash:
+        raise ChangeSetError('patch_digest_changed')
+    # Source and control state are never export destinations.
+    root = Path(export_root)
+    if root.resolve().is_relative_to(paths.root.resolve()) or paths.root.resolve().is_relative_to(root.resolve()):
+        raise ChangeSetError('export_state_overlap')
+    content = patch_text(changes)
+    disclosure_gate(content, 'patch_export')
+    fd = None
+    leaf_fd = None
+    try:
+        fd = _open_export_directory(root)
+        for parent in name.split('/')[:-1]:
+            next_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = next_fd
+        leaf_fd = os.open(name.split('/')[-1], os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=fd)
+        data = memoryview(content.encode())
+        while data:
+            written = os.write(leaf_fd, data)
+            if not written:
+                raise ChangeSetError('export_write_failed')
+            data = data[written:]
+        os.fsync(leaf_fd)
+        os.fsync(fd)
+    except OSError:
+        raise ChangeSetError('unsafe_or_conflicting_export_destination') from None
+    finally:
+        if leaf_fd is not None:
+            os.close(leaf_fd)
+        if fd is not None:
+            os.close(fd)
+    return root / name
 
 
 def _baseline_bytes(paths, relative: str) -> bytes:

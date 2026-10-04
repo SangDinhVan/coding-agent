@@ -3,6 +3,11 @@ from __future__ import annotations
 import json
 import logging
 import subprocess
+import selectors
+import os
+import time
+import hashlib
+import uuid
 from enum import Enum
 from pathlib import Path
 from typing import Callable
@@ -11,6 +16,7 @@ from sandbox.models import ExecRequest, ExecutionStatus, ManifestEntry, Resource
 
 
 logger = logging.getLogger(__name__)
+IDLE_COMMAND = ['-i', 'PATH=/usr/local/bin:/usr/bin:/bin', 'HOME=/tmp', '/usr/local/bin/python', '-I', '-c', 'import time; time.sleep(86400)']
 
 
 class DockerIsolationLevel(str, Enum):
@@ -41,7 +47,52 @@ class DockerTransportError(RuntimeError):
 
 
 def _run(argv, *, input=None, timeout=None):
-    return subprocess.run(argv, input=input, capture_output=True, text=True, timeout=timeout)
+    process = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, close_fds=True)
+    selector = selectors.DefaultSelector()
+    pending = memoryview((input or '').encode())
+    chunks = {'stdout': bytearray(), 'stderr': bytearray()}
+    deadline = time.monotonic() + (timeout or 30)
+    total = 0
+    try:
+        for stream, kind in ((process.stdout, 'stdout'), (process.stderr, 'stderr')):
+            os.set_blocking(stream.fileno(), False)
+            selector.register(stream, selectors.EVENT_READ, kind)
+        if pending:
+            os.set_blocking(process.stdin.fileno(), False)
+            selector.register(process.stdin, selectors.EVENT_WRITE, 'stdin')
+        else:
+            process.stdin.close()
+        while selector.get_map() or process.poll() is None:
+            if time.monotonic() >= deadline:
+                raise subprocess.TimeoutExpired(argv, timeout)
+            for key, _ in selector.select(0.05):
+                if key.data == 'stdin':
+                    try:
+                        written = os.write(key.fd, pending[:65536])
+                        pending = pending[written:]
+                    except BrokenPipeError:
+                        pending = memoryview(b'')
+                    if not pending:
+                        selector.unregister(key.fileobj)
+                        key.fileobj.close()
+                else:
+                    data = os.read(key.fd, 65536)
+                    if not data:
+                        selector.unregister(key.fileobj)
+                        continue
+                    total += len(data)
+                    if total > 64 * 1024**2:
+                        raise DockerTransportError('transport_output_limit')
+                    chunks[key.data].extend(data)
+        process.wait()
+        return subprocess.CompletedProcess(argv, process.returncode, chunks['stdout'].decode('utf-8', 'replace'), chunks['stderr'].decode('utf-8', 'replace'))
+    finally:
+        if process.poll() is None:
+            process.kill()
+        process.wait()
+        selector.close()
+        for stream in (process.stdin, process.stdout, process.stderr):
+            stream.close()
 
 
 def _translated_source(path: Path, mounts: tuple[tuple[Path, Path], ...]) -> Path | None:
@@ -63,6 +114,7 @@ class DockerBackend:
         self.image = image
         self.runner = runner
         self.container_id = None
+        self.creation_token = ''
         self.session_id = ""
         self.daemon_id = ""
         self.isolation_level = None
@@ -71,6 +123,7 @@ class DockerBackend:
         self.mode = WorkspaceMode.SHADOW
         self.mount_source = None
         self.masks: tuple[tuple[ManifestEntry, Path], ...] = ()
+        self.action_profile = False
 
     def _load_control_mounts(self):
         if not self.control_container_id or self.control_mounts:
@@ -164,8 +217,8 @@ class DockerBackend:
             "--security-opt", "no-new-privileges:true", "--pids-limit", str(limits.pids),
             "--memory", str(limits.memory_bytes), "--memory-swap", str(limits.memory_bytes),
             "--cpus", str(limits.cpus),
-            "--tmpfs", f"/tmp:rw,nosuid,nodev,noexec,size={limits.tmpfs_bytes}",
-            "--mount", f"type=bind,src={daemon_workspace},dst=/workspace",
+            "--tmpfs", f"/tmp:rw,nosuid,nodev,noexec,size={limits.tmpfs_bytes},nr_inodes={limits.tmpfs_inodes}",
+            "--mount", f"type=bind,src={daemon_workspace},dst=/workspace" + (",readonly" if self.action_profile else ""),
         ]
         normalized_masks = []
         for entry, source in masks:
@@ -176,7 +229,11 @@ class DockerBackend:
                 raise DockerPreflightError("Docker bind mount paths cannot contain a comma")
             argv.extend(("--mount", f"type=bind,src={daemon_source},dst={target},readonly"))
             normalized_masks.append((entry, source))
+        argv.extend(('--entrypoint', '/usr/bin/env'))
         argv.extend(("--workdir", "/workspace", "--user", runtime_user, self.image))
+        argv.extend(IDLE_COMMAND)
+        self.creation_token = uuid.uuid4().hex
+        argv[2:2] = ['--label', 'io.sang-coding-agent.creation=' + self.creation_token]
         self.container_id = self._checked(argv).strip()
         self.session_id = session_id
         self.mode = mode
@@ -229,6 +286,8 @@ class DockerBackend:
             "cpus": (host.get("NanoCpus") or 0) / 1_000_000_000,
             "cap_drop": list(host.get("CapDrop") or []),
             "security_opt": list(host.get("SecurityOpt") or []),
+            'entrypoint': config.get('Entrypoint'),
+            'command': config.get('Cmd'),
         }
 
     def verify_runtime(self, limits: ResourceLimits, workspace: Path) -> dict:
@@ -238,7 +297,7 @@ class DockerBackend:
             "image_digest": self.image,
             "user": "0:0" if self.mode == WorkspaceMode.LIVE else "65532:65532",
             "mount_source": str(self.daemon_source(Path(workspace))),
-            "mount_rw": True,
+            "mount_rw": not self.action_profile,
             "network_mode": "none",
             "read_only_rootfs": True,
             "pids": limits.pids,
@@ -271,6 +330,8 @@ for line in Path('/proc/mounts').read_text().splitlines():
     if len(fields) >= 4:
         mounts.append({'target': fields[1], 'options': fields[3].split(',')})
 print(json.dumps({
+    'tmpfs_bytes': __import__('os').statvfs('/tmp').f_blocks * __import__('os').statvfs('/tmp').f_frsize,
+    'tmpfs_inodes': __import__('os').statvfs('/tmp').f_files,
     'nonewprivs': status.get('NoNewPrivs'),
     'capeff': status.get('CapEff'),
     'memory': Path('/sys/fs/cgroup/memory.max').read_text().strip(),
@@ -306,11 +367,72 @@ print(json.dumps({
                 and {"rw", "nosuid", "nodev", "noexec"}.issubset(mount_map.get("/tmp", set()))
                 and writable <= allowed_writable
             )
+            if self.action_profile:
+                valid = valid and 'ro' in mount_map.get('/workspace', set()) and probe.get('tmpfs_bytes') == limits.tmpfs_bytes and probe.get('tmpfs_inodes') == limits.tmpfs_inodes
         except (KeyError, TypeError, ValueError) as error:
             raise DockerPreflightError("sandbox runtime probe returned invalid evidence") from error
         if not valid:
             raise DockerPreflightError("sandbox runtime probe contract mismatch")
         return {"inspect": evidence, "probe": probe}
+
+    def create_action(self, action_id, generation, limits):
+        if not action_id or any(c not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_' for c in action_id):
+            raise DockerPreflightError('invalid_action_id')
+        self.action_profile = True
+        return self.create(action_id, generation.digest, generation.directory, limits)
+
+    def verify_action(self, limits, generation):
+        if self.isolation_level != DockerIsolationLevel.ROOTLESS:
+            raise DockerPreflightError('action_requires_rootless')
+        evidence = self.verify_runtime(limits, generation.directory)
+        inspection = evidence['inspect']
+        if len(inspection['mounts']) != 1 or inspection['entrypoint'] != ['/usr/bin/env'] or inspection['command'] != IDLE_COMMAND:
+            raise DockerPreflightError('action_profile_mismatch')
+        self.verify_helpers()
+        return evidence
+
+    def verify_helpers(self):
+        from sandbox.helpers import helper_path
+        for name in ('sandbox_fs', 'sandbox_exec'):
+            source = helper_path(name)
+            expected = hashlib.sha256(source.read_bytes()).hexdigest()
+            script = f"import hashlib; print(hashlib.sha256(open('/opt/coding-agent/bin/{name}.py','rb').read()).hexdigest())"
+            actual = self._checked(['docker', 'exec', self.container_id, '/usr/local/bin/python', '-I', '-c', script]).strip()
+            if actual != expected:
+                raise DockerPreflightError('pinned_helper_mismatch')
+
+    def revoke_action(self):
+        if not self.container_id and not self.creation_token:
+            return
+        selection = ('label=io.sang-coding-agent.creation=' + self.creation_token
+                     if self.creation_token else 'id=' + self.container_id)
+        listing = ['docker', 'container', 'ls', '--all', '--quiet', '--no-trunc', '--filter', selection]
+        # A create response can be lost after the daemon accepted the request.
+        identities = [self.container_id] if self.container_id else self._checked(listing).split()
+        for identity in identities:
+            self._checked(['docker', 'rm', '--force', identity])
+        remaining = self._checked(listing).strip()
+        if remaining:
+            raise DockerTransportError('action_quiescence_unknown')
+        self.container_id = None
+        self.creation_token = ''
+
+    def exec_action(self, request, generation, limits):
+        identity = ''
+        try:
+            identity = self.create_action(request.action_id, generation, limits)
+            self.start()
+            self.verify_action(limits, generation)
+            data = self._helper('sandbox_exec', {'command': request.command, 'cwd': str(request.cwd),
+                'timeout_seconds': min(request.timeout_seconds, limits.tool_timeout_seconds), 'output_bytes': limits.output_bytes}, min(request.timeout_seconds, limits.tool_timeout_seconds) + 2)
+            if not isinstance(data, dict) or not isinstance(data.get('stdout'), str) or not isinstance(data.get('stderr'), str) or len((data['stdout'] + data['stderr']).encode()) > limits.output_bytes * 3:
+                raise DockerTransportError('invalid_action_output')
+            status = ExecutionStatus(data['status'])
+            result = SandboxResult(status, data['stdout'], data['stderr'], data.get('exit_code'), ViolationStatus.UNKNOWN,
+                request.action_id, identity, self.image, bool(data.get('truncated')), status.value, 'unknown', 'read_only', True)
+        finally:
+            self.revoke_action()
+        return result
 
     def _stop_after_ambiguous_transport(self):
         try:
@@ -325,7 +447,8 @@ print(json.dumps({
             raise DockerTransportError("container is unavailable")
         try:
             output = self._checked(
-                ["docker", "exec", "-i", self.container_id, "python", f"/opt/coding-agent/bin/{helper}.py"],
+                (["docker", "exec", "-i", '--user', '0:0', self.container_id, '/usr/local/bin/python', '-I', f"/opt/coding-agent/bin/{helper}.py"]
+                 if helper == 'sandbox_fs' else ["docker", "exec", "-i", self.container_id, '/usr/bin/env', '-i', 'PATH=/usr/local/bin:/usr/bin:/bin', 'HOME=/tmp', '/usr/local/bin/python', '-I', f"/opt/coding-agent/bin/{helper}.py"]),
                 input=json.dumps(payload, separators=(",", ":")), timeout=timeout,
             )
             return json.loads(output)
@@ -344,5 +467,21 @@ print(json.dumps({
         violation = ViolationStatus.DETECTED if status == ExecutionStatus.BLOCKED_BY_SANDBOX else ViolationStatus.UNKNOWN
         return SandboxResult(status, data.get("stdout", ""), data.get("stderr", ""), data.get("exit_code"), violation, self.session_id, self.container_id or "", self.image, bool(data.get("truncated")))
 
-    def fs_call(self, payload: dict) -> dict:
-        return self._helper("sandbox_fs", payload, 65)
+    def verify_file_adapter(self, limits, workspace, helper_digest):
+        if self.isolation_level != DockerIsolationLevel.ROOTLESS:
+            raise DockerPreflightError('safe file adapter requires rootless Docker')
+        evidence = self.verify_runtime(limits, workspace)
+        inspection = evidence['inspect']
+        if len(inspection.get('mounts', ())) != 1 or inspection.get('entrypoint') != ['/usr/bin/env'] or inspection.get('command') != IDLE_COMMAND:
+            raise DockerPreflightError('file_adapter_profile_mismatch')
+        script = "import hashlib; print(hashlib.sha256(open('/opt/coding-agent/bin/sandbox_fs.py','rb').read()).hexdigest())"
+        actual = self._checked(['docker', 'exec', self.container_id, '/usr/local/bin/python', '-I', '-c', script]).strip()
+        if actual != helper_digest:
+            raise DockerPreflightError('pinned file helper identity mismatch')
+        self.verify_helpers()
+        return {'file_adapter': True, 'helper_digest': actual, 'rootless': True, 'opaque_ro': True}
+
+    def fs_call(self, payload: dict, *, grant=None) -> dict:
+        if not isinstance(grant, dict):
+            raise DockerPreflightError('controller file grant required')
+        return self._helper("sandbox_fs", {'request': payload, 'grant': grant}, 65)

@@ -23,6 +23,9 @@ def _cwd(workspace, value):
 
 
 def execute(request, workspace="/workspace", output_limit=10 * 1024 * 1024):
+    output_limit = request.get('output_bytes', output_limit)
+    if type(output_limit) is not int or not 0 < output_limit <= 10 * 1024**2:
+        raise ValueError('invalid output budget')
     try:
         cwd = _cwd(workspace, request.get("cwd", "."))
     except (PermissionError, OSError) as error:
@@ -31,9 +34,10 @@ def execute(request, workspace="/workspace", output_limit=10 * 1024 * 1024):
     if timeout <= 0 or timeout > 600:
         return {"success": False, "status": "runtime_error", "stdout": "", "stderr": "invalid timeout", "exit_code": None, "truncated": False}
     process = subprocess.Popen(
-        ["/bin/bash", "-lc", request.get("command", "")], cwd=cwd,
+        ["/bin/bash", "--noprofile", "--norc", "-c", request.get("command", "")], cwd=cwd,
         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        start_new_session=True,
+        start_new_session=True, close_fds=True,
+        env={'PATH': '/usr/local/bin:/usr/bin:/bin', 'HOME': '/tmp', 'PYTHONDONTWRITEBYTECODE': '1'},
     )
     selector = selectors.DefaultSelector()
     selector.register(process.stdout, selectors.EVENT_READ, "stdout")
@@ -47,11 +51,17 @@ def execute(request, workspace="/workspace", output_limit=10 * 1024 * 1024):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             timed_out = True
-            os.killpg(process.pid, signal.SIGTERM)
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
             try:
                 process.wait(timeout=0.5)
             except subprocess.TimeoutExpired:
-                os.killpg(process.pid, signal.SIGKILL)
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
             break
         for key, _ in selector.select(min(remaining, 0.05)):
             data = os.read(key.fileobj.fileno(), 65536)
@@ -78,7 +88,10 @@ def execute(request, workspace="/workspace", output_limit=10 * 1024 * 1024):
 
 
 def main():
-    print(json.dumps(execute(json.load(sys.stdin))))
+    raw = sys.stdin.buffer.read(32 * 1024**2 + 1)
+    if len(raw) > 32 * 1024**2:
+        raise ValueError('input budget exceeded')
+    print(json.dumps(execute(json.loads(raw))))
 
 
 if __name__ == "__main__":

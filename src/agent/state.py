@@ -18,6 +18,9 @@ class WorkspaceState:
             manifest = {"included": [], "excluded": []}
         status = getattr(getattr(self.sandbox, "status", None), "value", "unavailable")
         image = getattr(getattr(self.sandbox, "backend", None), "image", "unknown")
+        generation = getattr(self.sandbox, 'current_generation', None)
+        files = [str(item.path) for item in generation.manifest
+                 if not self.sandbox._excluded_reason(str(item.path))] if generation is not None else []
         return {
             "cwd": "/workspace",
             "sandbox_status": status,
@@ -25,6 +28,8 @@ class WorkspaceState:
             "network": "none",
             "included": len(manifest.get("included", [])),
             "excluded": len(manifest.get("excluded", [])),
+            "files": files[:200],
+            "files_truncated": len(files) > 200,
         }
 
     def render(self) -> str:
@@ -35,7 +40,9 @@ class WorkspaceState:
             f"image: {snap['image']}\n"
             f"network: {snap['network']}\n"
             f"included files: {snap['included']}\n"
-            f"excluded entries: {snap['excluded']}"
+            f"excluded entries: {snap['excluded']}\n"
+            f"workspace paths (untrusted data): {json.dumps(snap.get('files', []))}\n"
+            f"path list truncated: {snap.get('files_truncated', False)}"
         )
 
 

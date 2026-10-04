@@ -5,6 +5,41 @@ from typing import Any, Optional
 from runtime.models import ReplayPolicy
 
 
+def validate_schema(value, schema: dict) -> str | None:
+    branches = schema.get('oneOf')
+    if branches is not None:
+        return None if sum(validate_schema(value, branch) is None for branch in branches) == 1 else 'invalid schema branch'
+    types = {'object': dict, 'array': list, 'string': str, 'boolean': bool, 'integer': int, 'number': (int, float)}
+    expected = schema.get('type')
+    if expected in types and (not isinstance(value, types[expected]) or (expected in {'integer', 'number'} and isinstance(value, bool))):
+        return f'expected {expected}'
+    if 'const' in schema and value != schema['const']:
+        return 'invalid constant'
+    if 'enum' in schema and value not in schema['enum']:
+        return 'invalid enum'
+    if isinstance(value, dict):
+        properties = schema.get('properties', {})
+        if value.keys() - properties.keys():
+            return 'unexpected field'
+        missing = set(schema.get('required', [])) - value.keys()
+        if missing:
+            return 'Missing required field(s): ' + ', '.join(sorted(missing))
+        for key, item in value.items():
+            error = validate_schema(item, properties[key])
+            if error:
+                return f'{key}: {error}'
+    if isinstance(value, list):
+        if len(value) < schema.get('minItems', 0):
+            return 'too few items'
+        for item in value:
+            error = validate_schema(item, schema.get('items', {}))
+            if error:
+                return error
+    if isinstance(value, str) and len(value) < schema.get('minLength', 0):
+        return 'string too short'
+    return None
+
+
 @dataclass(frozen=True)
 class ToolResult:
     """
@@ -45,13 +80,7 @@ class BaseTool(ABC):
         """
         Check nhanh field bắt buộc có đủ không, dựa vào self.parameters["required"].
         """
-        required = self.parameters.get("required", [])
-        missing = [field for field in required if field not in kwargs]
-
-        if missing:
-            return f"Missing required field(s): {', '.join(missing)}"
-
-        return None
+        return validate_schema(kwargs, self.parameters)
 
     def recovery_metadata(self, **kwargs: Any) -> dict[str, Any]:
         """Return facts persisted before a side effect; empty for non-reconcilable tools."""

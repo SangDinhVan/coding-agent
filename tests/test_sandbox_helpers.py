@@ -28,7 +28,11 @@ class FilesystemHelperTests(unittest.TestCase):
         self.workspace = Path(self.directory.name)
 
     def call(self, **request):
-        return self.fs.handle(request, self.workspace)
+        try:
+            grant = self.fs.make_grant(request, self.workspace)
+        except (OSError, ValueError, RuntimeError):
+            grant = {'max_bytes': self.fs.MAX_FILE_BYTES, 'max_total_bytes': self.fs.MAX_TOTAL_BYTES, 'max_entries': self.fs.MAX_ENTRIES}
+        return self.fs.handle(request, self.workspace, grant=grant)
 
     def test_rejects_absolute_parent_and_symlink_paths(self):
         outside = self.workspace.parent / "sandbox-helper-canary"

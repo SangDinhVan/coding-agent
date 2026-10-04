@@ -1,3 +1,4 @@
+from tests.fakes import trusted_executor
 import json
 import tempfile
 import unittest
@@ -26,7 +27,7 @@ class ToolLifecycleTests(unittest.TestCase):
 
     def executor(self, tool=None, policy=None, approval=None):
         tool = tool or FakeTool()
-        return ToolExecutor(
+        return trusted_executor(
             self.store,
             get_tool=lambda name: tool if name == tool.name else None,
             policy=policy,
@@ -42,7 +43,7 @@ class ToolLifecycleTests(unittest.TestCase):
         execution_id = executor.request_batch([call()], "t1")[0]
         result = executor.execute(execution_id)
         self.assertTrue(result.success)
-        self.assertEqual(self.types(), ["ToolRequested", "ToolValidated", "ToolStarted", "ToolCompleted"])
+        self.assertEqual(self.types(), ["ToolRequested", "ToolValidated", "ToolAuthorizationEvaluated", "ToolGrantClaimed", "ToolStarted", "SecurityStateUpdated", "ToolCompleted"])
         execution = replay(self.store.read_all()).executions[execution_id]
         self.assertEqual(execution.status, ToolExecutionStatus.COMPLETED)
         self.assertEqual(execution.result.raw, "raw-ok")
@@ -126,7 +127,7 @@ class PersistFailureTests(unittest.TestCase):
             store = EventStore(Path(directory) / "events.jsonl")
             self.addCleanup(store.close)
             tool = FakeTool()
-            executor = ToolExecutor(store, get_tool=lambda name: tool)
+            executor = trusted_executor(store, get_tool=lambda name: tool)
             execution_id = executor.request_batch([call()], "t1")[0]
             original = store.append_event
             def fail_started(event_type, *args, **kwargs):
@@ -145,7 +146,7 @@ class SecretArgumentTests(unittest.TestCase):
             self.addCleanup(store.close)
             tool = FakeTool()
             tool.parameters = {"type": "object", "properties": {"token": {"type": "string"}}, "required": ["token"]}
-            executor = ToolExecutor(store, get_tool=lambda name: tool)
+            executor = trusted_executor(store, get_tool=lambda name: tool)
             execution_id = executor.request_batch([call(arguments='{"token":"secret-value"}')], "t1")[0]
             self.assertTrue(executor.execute(execution_id).success)
             self.assertNotIn("secret-value", path.read_text(encoding="utf-8"))

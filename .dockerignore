@@ -1,10 +1,13 @@
 .git
 .env
 .venv
+.llm-traces
 __pycache__
 *.pyc
 memory
 output
 docs
 tests
-sandbox-image
+sandbox-image/*
+!sandbox-image/sandbox_fs.py
+!sandbox-image/sandbox_exec.py

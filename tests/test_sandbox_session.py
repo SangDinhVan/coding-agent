@@ -148,30 +148,20 @@ class SandboxSessionTests(unittest.TestCase):
         self.assertEqual(session.status, SandboxStatus.ERROR)
         self.assertGreaterEqual(self.backend.stops, 1)
 
-    def test_live_session_mounts_source_and_persists_mode_and_masks(self):
-        (self.source / ".env").write_text("SECRET=hidden", encoding="utf-8")
-        (self.source / ".git").mkdir()
-        session = self.session(WorkspaceMode.LIVE)
+    def test_live_session_is_rejected_without_source_effects(self):
+        with self.assertRaisesRegex(SessionError, 'unsupported_profile'):
+            self.session(WorkspaceMode.LIVE)
+        self.assertEqual((self.source / 'main.py').read_text(), 'print(1)')
+        self.assertFalse(self.paths.metadata.exists())
 
+    def test_persisted_live_metadata_is_rejected(self):
+        session = self.session()
         session.create()
-
-        self.assertEqual(self.backend.workspace, self.source.resolve())
-        self.assertEqual(self.backend.mode, WorkspaceMode.LIVE)
-        self.assertEqual(
-            {str(entry.path) for entry, _ in self.backend.masks},
-            {".env", ".git"},
-        )
-        metadata = json.loads(self.paths.metadata.read_text(encoding="utf-8"))
-        self.assertEqual(metadata["workspace_mode"], "live")
-        self.assertEqual({item["path"] for item in metadata["masks"]}, {".env", ".git"})
-
-    def test_live_tool_effect_is_immediately_visible_and_cannot_be_sealed(self):
-        session = self.session(WorkspaceMode.LIVE)
-        session.create(); session.start()
-        (self.backend.workspace / "main.py").write_text("print(2)", encoding="utf-8")
-        self.assertEqual((self.source / "main.py").read_text(encoding="utf-8"), "print(2)")
-        with self.assertRaisesRegex(SessionError, "live"):
-            session.prepare_changes()
+        data = json.loads(self.paths.metadata.read_text())
+        data['workspace_mode'] = 'live'
+        self.paths.metadata.write_text(json.dumps(data))
+        with self.assertRaisesRegex(SessionError, 'unsupported_profile'):
+            self.session()
 
     def test_legacy_metadata_without_mode_restores_as_shadow(self):
         session = self.session(WorkspaceMode.SHADOW)

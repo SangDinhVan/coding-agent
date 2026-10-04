@@ -1,322 +1,181 @@
-"""Opt-in security integration tests requiring a real rootless Docker daemon."""
-import errno
+"""Physical acceptance of the supported rootless disposable RO profile."""
 import json
 import os
-import socket
+import subprocess
 import tempfile
-import time
 import unittest
-import uuid
 from pathlib import Path
+from uuid import uuid4
 
 from core.paths import ControlPaths
-from sandbox.changes import ChangeSetError, apply_changeset
-from sandbox.docker import DockerBackend, DockerPreflightError
-from sandbox.models import ExecRequest, ExecutionStatus, ResourceLimits, SandboxPath, WorkspaceMode
-from sandbox.session import SandboxSession, cleanup_expired
-from sandbox.workspace import SnapshotError, prepare_workspace
+from memory.event_store import EventStore
+from runtime.executor import ToolExecutor
+from runtime.models import ApprovalDecision
+from sandbox.docker import DockerBackend, DockerIsolationLevel
+from sandbox.generations import Generation, copy_tree, seal_generation
+from sandbox.models import ExecRequest, ResourceLimits
+from sandbox.session import SandboxSession
+from tests.test_tool_lifecycle import call
+from tools.filesystem import WriteTool
+from tools.terminal import BashTool
 
-RUN = os.environ.get("RUN_SANDBOX_INTEGRATION") == "1"
-IMAGE = os.environ.get("SANDBOX_IMAGE", "")
 
-
-@unittest.skipUnless(RUN, "set RUN_SANDBOX_INTEGRATION=1")
-class RootlessSandboxIntegrationTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        if not IMAGE:
-            raise unittest.SkipTest("SANDBOX_IMAGE is required")
-
+@unittest.skipUnless(os.environ.get('RUN_SANDBOX_INTEGRATION') == '1', 'physical Docker acceptance is opt-in')
+class DisposableROIntegrationTests(unittest.TestCase):
     def setUp(self):
-        self.source_tmp = tempfile.TemporaryDirectory()
-        self.state_tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.source_tmp.cleanup)
-        self.addCleanup(self.state_tmp.cleanup)
-        self.source = Path(self.source_tmp.name)
-        self.state = Path(self.state_tmp.name)
-        (self.source / "main.py").write_text("print(1)\n", encoding="utf-8")
-        (self.source / ".env").write_text("TOP_SECRET=host-canary\n", encoding="utf-8")
-        self.session_id = "it-" + uuid.uuid4().hex
-        self.paths = ControlPaths.create(self.state, self.session_id, self.source)
-        self.backend = DockerBackend(IMAGE)
-        self.limits = ResourceLimits(memory_bytes=512 * 1024**2, pids=64, tmpfs_bytes=64 * 1024**2, tool_timeout_seconds=5, output_bytes=1024 * 1024)
-        self.session = SandboxSession(
-            self.session_id, self.source, self.paths, self.backend, self.limits,
-            mode=WorkspaceMode.SHADOW, free_space_floor_bytes=0,
-        )
-        self.addCleanup(self._cleanup)
-        self.session.create()
-        self.session.start()
+        self.image = os.environ['SANDBOX_IMAGE']
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.source = self.root / 'source'
+        self.source.mkdir()
+        (self.source / 'main.py').write_text('print(1)\n')
+        self.limits = ResourceLimits(memory_bytes=256*1024**2, pids=64, tmpfs_bytes=1024**2, tmpfs_inodes=128, output_bytes=4096, tool_timeout_seconds=2)
+        sealed = seal_generation(self.source, self.root / 'generations', max_bytes=100*1024**2, max_entries=10000)
+        view = self.root / 'view'
+        view.mkdir()
+        copy_tree(sealed.directory, view, max_bytes=100*1024**2, max_entries=10000)
+        view.chmod(0o755)
+        self.generation = Generation(sealed.digest, view, sealed.manifest)
+        self.backend = DockerBackend(self.image)
+        self.backend.preflight(self.limits)
+        self.assertEqual(self.backend.isolation_level, DockerIsolationLevel.ROOTLESS)
+        self.addCleanup(self.backend.destroy)
 
-    def _cleanup(self):
-        try:
-            self.backend.destroy()
-        except Exception:
-            pass
+    def execute(self, command, timeout=2):
+        result = self.backend.exec_action(ExecRequest(uuid4().hex, command, timeout_seconds=timeout), self.generation, self.limits)
+        self.assertTrue(result.quiescent)
+        self.assertIsNone(self.backend.container_id)
+        return result
 
-    def exec(self, command, timeout=5):
-        return self.session.exec(ExecRequest(uuid.uuid4().hex, command, SandboxPath("."), timeout))
-
-    def test_runtime_contract_and_cgroups(self):
-        evidence = self.backend.inspect()
-        self.assertTrue(evidence["running"])
-        self.assertEqual(evidence["image_digest"], IMAGE)
-        self.assertEqual(evidence["user"], "65532:65532")
-        self.assertEqual(evidence["network_mode"], "none")
-        self.assertTrue(evidence["read_only_rootfs"])
-        self.assertEqual(evidence["cap_drop"], ["ALL"])
-        self.assertIn("no-new-privileges:true", evidence["security_opt"])
-        self.assertEqual(evidence["pids"], 64)
-        self.assertEqual(evidence["memory_bytes"], 512 * 1024**2)
-        self.assertEqual(evidence["mount_source"], str(self.paths.workspace.resolve()))
-        probe = self.exec("python - <<'PY'\nimport json\nfrom pathlib import Path\np=Path('/proc/self/status').read_text()\nr={k:v.strip() for k,v in (line.split(':',1) for line in p.splitlines() if ':' in line)}\nprint(json.dumps({'nonewprivs':r['NoNewPrivs'],'capeff':r['CapEff'],'memory':Path('/sys/fs/cgroup/memory.max').read_text().strip(),'swap':Path('/sys/fs/cgroup/memory.swap.max').read_text().strip(),'pids':Path('/sys/fs/cgroup/pids.max').read_text().strip(),'cpu':Path('/sys/fs/cgroup/cpu.max').read_text().strip(),'route':Path('/proc/net/route').read_text()}))\nPY")
-        data = json.loads(probe.stdout)
-        self.assertEqual(data["nonewprivs"], "1")
-        self.assertEqual(int(data["capeff"], 16), 0)
-        self.assertEqual(data["memory"], str(512 * 1024**2))
-        self.assertEqual(data["swap"], "0")
-        self.assertEqual(data["pids"], "64")
-        self.assertEqual(data["cpu"], "200000 100000")
-        self.assertEqual(len(data["route"].splitlines()), 1)
-
-    def test_filesystem_escape_secrets_and_rootfs_are_blocked(self):
-        for path in ("/etc/passwd", "../escape", "link/out"):
-            if path == "link/out":
-                (self.paths.workspace / "link").symlink_to("/tmp")
-            result = self.session.fs_call({"operation": "write", "path": path, "content": "bad"})
-            self.assertFalse(result["success"], path)
-            self.assertEqual(result["status"], "blocked_by_sandbox")
-        shell = self.exec("set +e; test ! -e .env; test ! -e .git; test ! -S /var/run/docker.sock; test ! -e /home/sang; printf bad >/root/bad 2>/dev/null; test $? -ne 0")
-        self.assertTrue(shell.success, shell.stderr)
-        self.assertEqual((self.source / ".env").read_text(), "TOP_SECRET=host-canary\n")
-
-    def test_network_is_unreachable(self):
-        result = self.exec("python - <<'PY'\nimport socket\nfor host,port in [('127.0.0.1',1),('169.254.169.254',80),('10.0.0.1',80),('1.1.1.1',53)]:\n s=socket.socket(); s.settimeout(.2)\n try: s.connect((host,port))\n except OSError: pass\n else: raise SystemExit(f'reachable: {host}')\n finally: s.close()\nPY")
-        self.assertTrue(result.success, result.stderr)
-
-    def test_pid_exhaustion_is_capped_by_cgroup(self):
-        result = self.exec("""python - <<'PY'
-import json, os, signal, time
-children = []
-try:
-    while True:
-        pid = os.fork()
-        if pid == 0:
-            time.sleep(30)
-            os._exit(0)
-        children.append(pid)
-except OSError as error:
-    print(json.dumps({'errno': error.errno, 'count': len(children)}))
-finally:
-    for pid in children:
-        try: os.kill(pid, signal.SIGKILL)
-        except ProcessLookupError: pass
-    for pid in children:
-        try: os.waitpid(pid, 0)
-        except ChildProcessError: pass
-PY""", timeout=10)
-        self.assertTrue(result.success, result.stderr)
-        observed = json.loads(result.stdout)
-        self.assertEqual(observed["errno"], errno.EAGAIN)
-        self.assertLess(observed["count"], self.limits.pids)
-
-    def test_output_is_bounded_and_timeout_stops_container(self):
-        output = self.exec("python -c \"print('x'*12000000)\"")
-        self.assertTrue(output.truncated)
-        self.assertLessEqual(len(output.stdout.encode()), 10 * 1024**2)
-        timed = self.exec("(setsid sh -c 'sleep 30' &) ; sleep 30", timeout=1)
-        self.assertEqual(timed.status, ExecutionStatus.TIMED_OUT)
-        self.assertFalse(self.backend.inspect()["running"])
-
-    def test_host_unchanged_until_exact_whole_set_apply_and_conflict_blocks_all(self):
-        result = self.exec("printf 'print(2)\\n' > main.py; printf created > created.txt")
+    def test_success_descendant_and_timeout_revocation(self):
+        observed_pids = []
+        revoke = self.backend.revoke_action
+        def inspect_then_revoke():
+            cid = self.backend.container_id
+            if cid:
+                listing = self.backend._checked(['docker', 'top', cid, '-eo', 'pid'])
+                observed_pids.extend(int(line.strip()) for line in listing.splitlines()[1:] if line.strip().isdigit())
+            revoke()
+        self.backend.revoke_action = inspect_then_revoke
+        result = self.execute("python -c \"import os,time; p=os.fork(); (os.setsid(),os.close(0),os.close(1),os.close(2),time.sleep(60)) if p==0 else None\"")
         self.assertTrue(result.success)
-        self.assertEqual((self.source / "main.py").read_text(), "print(1)\n")
-        self.assertFalse((self.source / "created.txt").exists())
-        changes = self.session.prepare_changes()
-        self.assertTrue(changes.approvable)
-        (self.source / "main.py").write_text("user edit\n", encoding="utf-8")
-        with self.assertRaisesRegex(ChangeSetError, "conflict"):
-            apply_changeset(self.paths, self.source, changes, changes.change_set_hash, "reviewed")
-        self.assertFalse((self.source / "created.txt").exists())
-        self.assertEqual((self.source / "main.py").read_text(), "user edit\n")
+        self.assertGreaterEqual(len(observed_pids), 2)
+        self.assertTrue(all(not Path('/proc').joinpath(str(pid)).exists() for pid in observed_pids))
+        timed = self.execute('sleep 60', timeout=0.2)
+        self.assertEqual(timed.status.value, 'timed_out')
+        self.assertEqual(timed.enforcement_observation, 'unknown')
 
-    def test_exact_whole_set_apply_succeeds(self):
-        result = self.exec("printf 'print(2)\\n' > main.py; printf created > created.txt")
+    def test_cancel_revokes_container(self):
+        helper = self.backend._helper
+        def cancel(*args, **kwargs):
+            raise KeyboardInterrupt()
+        self.backend._helper = cancel
+        with self.assertRaises(KeyboardInterrupt):
+            self.execute('sleep 60')
+        self.assertIsNone(self.backend.container_id)
+        self.backend._helper = helper
+
+    def test_ro_scope_and_clean_environment(self):
+        result = self.execute("python - <<'CODE'\nimport os,pathlib\nassert not any(k in os.environ for k in ('API_KEY','DOCKER_HOST','BASE_URL'))\nassert not pathlib.Path('/var/run/docker.sock').exists()\nfor p in ('/workspace/main.py','/workspace/absent','/workspace/conftest.py','/etc/canary'):\n try: pathlib.Path(p).write_text('bad')\n except OSError: pass\n else: raise AssertionError(p)\nCODE")
         self.assertTrue(result.success, result.stderr)
-        changes = self.session.prepare_changes()
-        applied = apply_changeset(self.paths, self.source, changes, changes.change_set_hash, "integration approval")
-        self.assertTrue(applied.success)
-        self.assertEqual((self.source / "main.py").read_text(), "print(2)\n")
-        self.assertEqual((self.source / "created.txt").read_text(), "created")
+        self.assertEqual((self.source / 'main.py').read_text(), 'print(1)\n')
 
-    def test_injected_mid_apply_failure_rolls_back_real_workspace(self):
-        result = self.exec("printf 'print(2)\\n' > main.py; printf created > created.txt")
+    def test_network_external_denied_loopback_namespace_possible(self):
+        result = self.execute("python - <<'CODE'\nimport socket\ns=socket.socket(); s.settimeout(.2)\ntry: s.connect(('169.254.169.254',80))\nexcept OSError: pass\nelse: raise AssertionError('metadata reachable')\ns.close()\ns=socket.socket(); s.bind(('127.0.0.1',0)); s.listen(); c=socket.socket(); c.connect(s.getsockname()); a,_=s.accept(); a.close(); c.close(); s.close()\nCODE")
         self.assertTrue(result.success, result.stderr)
-        changes = self.session.prepare_changes()
-        with self.assertRaisesRegex(OSError, "injected"):
-            apply_changeset(
-                self.paths, self.source, changes, changes.change_set_hash,
-                "integration rollback", fail_after=2,
-            )
-        self.assertEqual((self.source / "main.py").read_text(), "print(1)\n")
-        self.assertFalse((self.source / "created.txt").exists())
-        self.assertFalse((self.paths.rollback / "apply-journal.json").exists())
 
-    def test_expired_session_cleanup_removes_exact_container_and_state(self):
-        self.session.stop("ttl")
-        metadata = json.loads(self.paths.metadata.read_text(encoding="utf-8"))
-        metadata["updated_at"] = 0
-        self.paths.metadata.write_text(json.dumps(metadata), encoding="utf-8")
+    def test_tmpfs_byte_and_inode_exhaustion(self):
+        for body in ("open('/tmp/huge','wb').write(b'x'*(2*1024**2))", "[open('/tmp/f'+str(i),'w').close() for i in range(200)]"):
+            result = self.execute("python - <<'CODE'\ntry:\n " + body + "\nexcept OSError as e:\n assert e.errno==28\nelse: raise AssertionError('budget absent')\nCODE")
+            self.assertTrue(result.success, result.stderr)
 
-        def backend_factory(data):
-            backend = DockerBackend(IMAGE)
-            backend.container_id = data["container_id"]
-            return backend
+    def test_output_budget_and_nonzero(self):
+        result = self.execute("python -c \"print('x'*10000)\"")
+        self.assertTrue(result.truncated)
+        self.assertLessEqual(len(result.stdout.encode()), 4096)
+        self.assertFalse(self.execute('exit 7').success)
 
-        removed = cleanup_expired(
-            self.state, now=time.time(), ttl_seconds=1,
-            backend_factory=backend_factory,
-        )
-        self.assertEqual(removed, [self.session_id])
-        self.assertFalse(self.paths.session_dir.exists())
+    def test_private_edit_then_content_bound_ro_test(self):
+        (self.source / '.env').write_text('SECRET=host-canary')
+        original = {p.name: (p.read_bytes(), p.stat().st_mode, p.stat().st_ino) for p in self.source.iterdir()}
+        paths = ControlPaths.create(self.root / 'state', uuid4().hex, self.source)
+        backend = DockerBackend(self.image)
+        self.addCleanup(backend.destroy)
+        session = SandboxSession(paths.session_dir.name, self.source, paths, backend, self.limits, free_space_floor_bytes=0)
+        session.create(); session.start()
+        with EventStore(self.root / 'events.jsonl', session_id=session.session_id) as store:
+            tools = {'write': WriteTool(session), 'bash': BashTool(session)}
+            executor = ToolExecutor(store, get_tool=tools.get, policy=lambda execution: 'allow', get_security_context=session.security_context, approval_handler=lambda request: ApprovalDecision(True))
+            for name,args in [('write',{'path':'main.py','content':'print(2)\n'}), ('bash',{'command':'python main.py'})]:
+                identity = executor.request_batch([call(name=name,arguments=json.dumps(args))], 'turn')[0]
+                result = executor.execute(identity)
+                self.assertTrue(result.success, result.raw)
+            self.assertIn('2', result.raw)
+            identity = executor.request_batch([call(name='bash',arguments=json.dumps({'command':"python -c \"open('cache','w').write('x')\""}))], 'turn')[0]
+            self.assertFalse(executor.execute(identity).success)
+        self.assertEqual({p.name: (p.read_bytes(), p.stat().st_mode, p.stat().st_ino) for p in self.source.iterdir()}, original)
 
-    def test_resume_reconciles_exact_container(self):
-        self.session.stop("crash")
-        resumed_backend = DockerBackend(IMAGE)
-        resumed_backend.container_id = self.backend.container_id
-        resumed_backend.session_id = self.session_id
-        resumed = SandboxSession(
-            self.session_id, self.source, self.paths, resumed_backend, self.limits,
-            mode=WorkspaceMode.SHADOW, free_space_floor_bytes=0,
-        )
-        resumed.resume()
-        self.assertTrue(resumed_backend.inspect()["running"])
-        resumed.stop("test")
+    def test_end_to_end_modes_export_and_source_intact(self):
+        from agent.loop import Agent
+        from runtime.safety import AuthorityRecord, SafetyConfig
+        from runtime.reducer import replay
+        for mode in ('ask_all', 'ask_on_escalation', 'auto_review'):
+            with self.subTest(mode=mode):
+                identity = uuid4().hex
+                paths = ControlPaths.create(self.root / ('state-' + mode), identity, self.source)
+                backend = DockerBackend(self.image)
+                self.addCleanup(backend.destroy)
+                session = SandboxSession(identity, self.source, paths, backend, self.limits, free_space_floor_bytes=0)
+                session.create(); session.start()
+                destination = self.root / ('export-' + mode)
+                destination.mkdir()
+                approvals = []
+                def approve(request):
+                    approvals.append(request)
+                    return ApprovalDecision(True)
+                export_authority = AuthorityRecord('explicit-user-export', identity, session.authority.source_selection_digest,
+                                                   str(destination), ('export_patch',), ('patch_export',))
+                agent = Agent(str(self.root / (identity + '.jsonl')), workdir=str(self.source), sandbox=session,
+                              state_root=paths.root, export_root=destination, export_authority=export_authority,
+                              safety_config=SafetyConfig(approval_mode=mode), approval_handler=approve)
+                self.addCleanup(agent.close)
+                before = ((self.source / 'main.py').read_bytes(), (self.source / 'main.py').stat().st_ino)
+                for name,args in [('write', {'path':'main.py','content':'print(3)\n'}),
+                                  ('write', {'path':'conftest.py','content':'# approved control\n'}),
+                                  ('bash', {'command':'python main.py'})]:
+                    execution = agent.tool_executor.request_batch([call(name=name,arguments=json.dumps(args))], 't')[0]
+                    result = agent.tool_executor.execute(execution)
+                    self.assertTrue(result.success, result.raw)
+                self.assertEqual(len(approvals), 3 if mode == 'ask_all' else 2)
+                changes = agent.prepare_changes()
+                exported = agent.export_changes('review.patch', changes.change_set_hash)
+                self.assertIn('+print(3)', exported.read_text())
+                self.assertEqual(((self.source / 'main.py').read_bytes(), (self.source / 'main.py').stat().st_ino), before)
+                self.assertFalse((self.source / 'conftest.py').exists())
+                self.assertTrue(replay(agent.event_store.read_all()).security_state.agent_modified_content)
 
-
-@unittest.skipUnless(RUN, "set RUN_SANDBOX_INTEGRATION=1")
-class RootlessLiveWorkspaceIntegrationTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        if not IMAGE:
-            raise unittest.SkipTest("SANDBOX_IMAGE is required")
-
-    def setUp(self):
-        self.source_tmp = tempfile.TemporaryDirectory()
-        self.state_tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.source_tmp.cleanup)
-        self.addCleanup(self.state_tmp.cleanup)
-        self.source = Path(self.source_tmp.name)
-        self.state = Path(self.state_tmp.name)
-        (self.source / "main.py").write_text("print(1)\n", encoding="utf-8")
-        (self.source / ".env").write_text("TOP_SECRET=host-canary\n", encoding="utf-8")
-        (self.source / ".git").mkdir()
-        (self.source / ".git" / "config").write_text("private", encoding="utf-8")
-        (self.source / ".gitignore").write_text("ignored/\n", encoding="utf-8")
-        (self.source / "ignored").mkdir()
-        (self.source / "ignored" / "secret.txt").write_text("ignored-secret", encoding="utf-8")
-        self.session_id = "it-live-" + uuid.uuid4().hex
-        self.paths = ControlPaths.create(self.state, self.session_id, self.source)
-        self.backend = DockerBackend(IMAGE)
-        self.limits = ResourceLimits(
-            memory_bytes=512 * 1024**2, pids=64, tmpfs_bytes=64 * 1024**2,
-            tool_timeout_seconds=5, output_bytes=1024 * 1024,
-        )
-        self.session = SandboxSession(
-            self.session_id, self.source, self.paths, self.backend, self.limits,
-            mode=WorkspaceMode.LIVE, free_space_floor_bytes=0,
-        )
-        self.addCleanup(self._cleanup)
-        self.session.create()
-        self.session.start()
-
-    def _cleanup(self):
-        try:
-            self.backend.destroy()
-        except Exception:
-            pass
-
-    def exec(self, command, timeout=5):
-        return self.session.exec(ExecRequest(uuid.uuid4().hex, command, SandboxPath("."), timeout))
-
-    def test_live_writes_are_immediate_security_masked_and_owned_by_host_user(self):
-        result = self.exec(
-            "set -e; printf 'print(2)\\n' > main.py; printf created > created.txt; "
-            "test -f .env; test ! -s .env; "
-            "test ! -e .git/config; test -f ignored/secret.txt; "
-            "printf generated > ignored/output.txt; "
-            "if printf exposed > .env 2>/dev/null; then exit 1; fi; "
-            "test ! -S /var/run/docker.sock"
-        )
-        self.assertTrue(result.success, result.stderr)
-        self.assertEqual((self.source / "main.py").read_text(encoding="utf-8"), "print(2)\n")
-        created = self.source / "created.txt"
-        self.assertEqual(created.read_text(encoding="utf-8"), "created")
-        self.assertEqual(created.stat().st_uid, os.getuid())
-        self.assertEqual((self.source / "ignored" / "output.txt").read_text(encoding="utf-8"), "generated")
-        self.assertEqual((self.source / ".env").read_text(encoding="utf-8"), "TOP_SECRET=host-canary\n")
-        self.assertEqual((self.source / ".git" / "config").read_text(encoding="utf-8"), "private")
-
-    def test_live_runtime_keeps_rootless_security_contract(self):
-        evidence = self.backend.inspect()
-        self.assertEqual(evidence["mount_source"], str(self.source.resolve()))
-        self.assertEqual(evidence["user"], "0:0")
-        self.assertEqual(evidence["network_mode"], "none")
-        self.assertTrue(evidence["read_only_rootfs"])
-        self.assertEqual(evidence["cap_drop"], ["ALL"])
-        self.assertIn("no-new-privileges:true", evidence["security_opt"])
-        network = self.exec("python -c \"import socket; socket.create_connection(('1.1.1.1', 53), .2)\"")
-        self.assertFalse(network.success)
-
-    def test_live_resume_reconciles_exact_source_and_masks(self):
-        self.session.stop("resume-test")
-        resumed_backend = DockerBackend(IMAGE)
-        resumed_backend.container_id = self.backend.container_id
-        resumed_backend.session_id = self.session_id
-        resumed = SandboxSession(
-            self.session_id, self.source, self.paths, resumed_backend, self.limits,
-            mode=WorkspaceMode.LIVE, free_space_floor_bytes=0,
-        )
-        resumed.resume()
-        self.assertTrue(resumed_backend.inspect()["running"])
-        resumed.stop("test")
-
-
-@unittest.skipUnless(RUN, "set RUN_SANDBOX_INTEGRATION=1")
-class RootlessPreflightIntegrationTests(unittest.TestCase):
-    def test_mutable_or_wrong_image_fails_closed(self):
-        with self.assertRaises(DockerPreflightError):
-            DockerBackend("python:latest")
-        wrong = "missing@sha256:" + "0" * 64
-        with self.assertRaises((DockerPreflightError, RuntimeError)):
-            DockerBackend(wrong).preflight(ResourceLimits())
-
-    def test_malicious_snapshot_rejects_escape_and_fifo_without_reading_canary(self):
-        with tempfile.TemporaryDirectory() as source_dir, tempfile.TemporaryDirectory() as state_dir:
-            source, state = Path(source_dir), Path(state_dir)
-            (source / "main.py").write_text("print(1)\n", encoding="utf-8")
-            (source / ".env").write_text("SECRET=hidden\n", encoding="utf-8")
-            paths = ControlPaths.create(state, "snapshot-secret", source)
-            manifest = prepare_workspace(source, paths, free_space_floor_bytes=0)
-            self.assertFalse((paths.workspace / ".env").exists())
-            self.assertIn(".env", {str(entry.path) for entry in manifest.excluded})
-
-        for kind in ("symlink", "fifo"):
-            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as source_dir, tempfile.TemporaryDirectory() as state_dir:
-                source, state = Path(source_dir), Path(state_dir)
-                canary = state / "outside-canary"
-                canary.write_text("host-canary", encoding="utf-8")
-                if kind == "symlink":
-                    (source / "escape").symlink_to(canary)
-                else:
-                    os.mkfifo(source / "pipe")
-                paths = ControlPaths.create(state, f"snapshot-{kind}", source)
-                with self.assertRaises(SnapshotError):
-                    prepare_workspace(source, paths, free_space_floor_bytes=0)
-                self.assertEqual(canary.read_text(encoding="utf-8"), "host-canary")
-
-
-
-if __name__ == "__main__":
-    unittest.main()
+    def test_physical_secret_stdout_blocks_disclosure_and_later_effects(self):
+        from agent.loop import Agent
+        from runtime.safety import DisclosureDenied
+        from runtime.reducer import replay
+        identity = uuid4().hex
+        paths = ControlPaths.create(self.root / 'secret-state', identity, self.source)
+        backend = DockerBackend(self.image)
+        self.addCleanup(backend.destroy)
+        session = SandboxSession(identity, self.source, paths, backend, self.limits, free_space_floor_bytes=0)
+        session.create(); session.start()
+        agent = Agent(str(self.root / (identity + '.jsonl')), workdir=str(self.source), sandbox=session,
+                      state_root=paths.root, approval_handler=lambda request: ApprovalDecision(True))
+        self.addCleanup(agent.close)
+        command = "python -c \"print('SECRET=' + ''.join(map(chr,[99,97,110,97,114,121,45,118,97,108,117,101])))\""
+        execution = agent.tool_executor.request_batch([call(name='bash',arguments=json.dumps({'command':command}))], 't')[0]
+        result = agent.tool_executor.execute(execution)
+        self.assertFalse(result.success)
+        self.assertNotIn('SECRET=canary-value', agent.event_store.path.read_text())
+        self.assertTrue(replay(agent.event_store.read_all()).security_state.secret_exposure_detected)
+        with self.assertRaises(DisclosureDenied):
+            agent.gate_text('benign', 'main_model')
+        execution = agent.tool_executor.request_batch([call(name='write', arguments=json.dumps({'path':'later','content':'blocked'}))], 't')[0]
+        self.assertFalse(agent.tool_executor.execute(execution).success)
+        self.assertFalse((paths.workspace / 'later').exists())

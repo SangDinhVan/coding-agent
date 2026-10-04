@@ -69,7 +69,13 @@ def reduce_event(state: RuntimeState, event: dict) -> RuntimeState:
     payload = event["payload"]
     ts = event["ts"]
 
-    if kind == "TurnStarted":
+    if kind == 'SecurityStateUpdated':
+        state.security_state.merge(payload)
+        return state
+    if kind == 'SafetyConstraintsRetained':
+        for key in ('excluded_paths', 'human_gate_paths'):
+            state.safety_constraints[key] = sorted(set(state.safety_constraints.get(key, [])) | set(payload.get(key, [])))
+    elif kind == "TurnStarted":
         if state.active_turn_id is not None or aggregate_id in state.turns:
             raise ValueError("cannot start a duplicate or concurrent turn")
         turn = TurnState(
@@ -179,8 +185,11 @@ def reduce_event(state: RuntimeState, event: dict) -> RuntimeState:
             replay_policy=ReplayPolicy(payload.get("replay_policy", "manual")),
             attempt=int(payload.get("attempt", 0)),
             recovery_metadata=dict(payload.get("recovery_metadata", {})),
+            retry_of_execution_id=payload.get('retry_of_execution_id'),
+            requested_seq=event['seq'],
         )
     elif kind in {
+        "ToolAuthorizationEvaluated", "ToolGrantClaimed",
         "ToolValidated", "ToolApprovalRequested", "ToolApproved", "ToolRejected",
         "ToolStarted", "ToolCompleted", "ToolFailed", "ToolCancelled",
         "ToolRecoveryRequired", "ToolRecoveredAsCompleted", "ToolRecoveredAsFailed",
@@ -191,7 +200,17 @@ def reduce_event(state: RuntimeState, event: dict) -> RuntimeState:
             raise ValueError("tool event references missing execution")
         if execution.status in _TERMINAL_TOOLS:
             raise ValueError("terminal tool execution cannot transition")
-        if kind == "ToolValidated":
+        if kind == "ToolAuthorizationEvaluated":
+            if execution.status != ToolExecutionStatus.PENDING or execution.grant_claimed:
+                raise ValueError('only unclaimed pending tool can authorize')
+            execution.authorization = dict(payload)
+        elif kind == "ToolGrantClaimed":
+            if execution.status != ToolExecutionStatus.PENDING or execution.grant_claimed:
+                raise ValueError('grant is one-use')
+            if not payload.get('binding_digest') or payload.get('binding_digest') != execution.authorization.get('binding_digest') or payload.get('max_uses') != 1:
+                raise ValueError('grant does not match authorization')
+            execution.grant_claimed = True
+        elif kind == "ToolValidated":
             if execution.status != ToolExecutionStatus.PENDING:
                 raise ValueError("only pending tool can validate")
             execution.arguments = dict(payload.get("arguments", execution.arguments))
@@ -199,11 +218,12 @@ def reduce_event(state: RuntimeState, event: dict) -> RuntimeState:
             if execution.status != ToolExecutionStatus.PENDING:
                 raise ValueError("only pending tool can request approval")
             execution.status = ToolExecutionStatus.WAITING_APPROVAL
+            execution.approval_binding_digest = payload.get('binding_digest')
         elif kind == "ToolApproved":
             if execution.status != ToolExecutionStatus.WAITING_APPROVAL:
                 raise ValueError("only waiting tool can be approved")
             execution.status = ToolExecutionStatus.PENDING
-            execution.approval = ApprovalMetadata(True, payload.get("approved_by", "user"), ts, payload.get("note"))
+            execution.approval = ApprovalMetadata(True, payload.get("approved_by", "user"), ts, payload.get("note"), payload.get('binding_digest'))
         elif kind == "ToolRejected":
             if execution.status != ToolExecutionStatus.WAITING_APPROVAL:
                 raise ValueError("only waiting tool can be rejected")
@@ -236,8 +256,10 @@ def reduce_event(state: RuntimeState, event: dict) -> RuntimeState:
                 raise ValueError("tool cannot cancel from current state")
             execution.status = ToolExecutionStatus.CANCELLED
             execution.finished_at = ts
+            if 'result' in payload:
+                execution.result = ToolResultData(**payload['result'])
         elif kind == "ToolRecoveryRequired":
-            if execution.status != ToolExecutionStatus.RUNNING:
+            if execution.status != ToolExecutionStatus.RUNNING and not (execution.status == ToolExecutionStatus.PENDING and execution.grant_claimed):
                 raise ValueError("only running tool can require recovery")
             execution.status = ToolExecutionStatus.RECOVERY_REQUIRED
         elif kind == "ToolRecoveredAsCompleted":
@@ -258,17 +280,23 @@ def reduce_event(state: RuntimeState, event: dict) -> RuntimeState:
                 raise ValueError("only recovery-required tool can retry")
             execution.status = ToolExecutionStatus.PENDING
             execution.attempt += 1
+            execution.grant_claimed = False
+            execution.authorization = {}
+            execution.approval = None
+            execution.approval_binding_digest = None
         turn = state.turns.get(event.get("turn_id"))
         if turn and kind in {"ToolCompleted", "ToolFailed", "ToolRejected", "ToolCancelled", "ToolRecoveredAsCompleted", "ToolRecoveredAsFailed"}:
             turn.completion_block_count = 0
     known_noop_events = {
+        'SafetyConstraintsRetained',
+        'PatchExportAuthorized', 'PatchExportCompleted',
         "UserMessageRecorded", "AssistantToolCallsRecorded", "ToolMessageRecorded",
         "AssistantMessageRecorded", "CompletionRequested", "ContextCompacted",
     }
     if kind not in known_noop_events and not (
         kind in {"TurnStarted", "TurnIterationAdvanced", "CompletionBlocked", "TurnCompleted", "TurnInterrupted", "TurnFailed"}
         or kind in {"PlanCreated", "PlanRevised", "PlanStepStarted", "PlanStepCompleted", "PlanStepFailed", "PlanStepSkipped"}
-        or kind in {"ToolRequested", "ToolValidated", "ToolApprovalRequested", "ToolApproved", "ToolRejected", "ToolStarted", "ToolCompleted", "ToolFailed", "ToolCancelled", "ToolRecoveryRequired", "ToolRecoveredAsCompleted", "ToolRecoveredAsFailed", "ToolRetryScheduled"}
+        or kind in {"ToolAuthorizationEvaluated", "ToolGrantClaimed", "ToolRequested", "ToolValidated", "ToolApprovalRequested", "ToolApproved", "ToolRejected", "ToolStarted", "ToolCompleted", "ToolFailed", "ToolCancelled", "ToolRecoveryRequired", "ToolRecoveredAsCompleted", "ToolRecoveredAsFailed", "ToolRetryScheduled"}
     ):
         raise ValueError(f"unknown event type: {kind}")
     if kind in _STATE_VERSION_EVENTS:
@@ -287,6 +315,8 @@ def replay(events: Iterable[dict], current_runtime_instance_id: str | None = Non
         except (KeyError, TypeError, ValueError) as error:
             raise JournalCorruptionError(f"invalid historical transition at seq {event.get('seq')}: {error}") from error
     for execution in state.executions.values():
+        if execution.status == ToolExecutionStatus.PENDING and execution.grant_claimed:
+            execution.status = ToolExecutionStatus.RECOVERY_REQUIRED
         started_instance = execution.recovery_metadata.get("_started_runtime_instance_id")
         if execution.status == ToolExecutionStatus.RUNNING and (
             current_runtime_instance_id is None or started_instance != current_runtime_instance_id
@@ -331,6 +361,34 @@ def pending_runtime_actions(state: RuntimeState) -> list[PendingRuntimeAction]:
     return actions
 
 
+def retry_intent(execution) -> dict:
+    arguments = execution.arguments
+    if execution.tool_name == 'update_plan':
+        return {'tool': 'update_plan', 'action': arguments.get('action'), 'step_id': arguments.get('step_id')}
+    if execution.tool_name == 'bash':
+        # A shell intent is shared within the turn; command/cwd/labels cannot reset a denial.
+        return {'tool': 'bash', 'action': 'execute_shell'}
+    return {'tool': execution.tool_name, 'path': arguments.get('path')}
+
+
+def retry_constraints(state: RuntimeState) -> list[dict]:
+    counts = {}
+    for execution in state.executions.values():
+        if execution.turn_id != state.active_turn_id or execution.requested_seq <= state.state_version:
+            continue
+        result = execution.result
+        reason = result.metadata.get('reason_code') if result and not result.success else None
+        reason = reason or (execution.error.category if execution.error else None)
+        if not reason or reason == 'retry_forbidden':
+            continue
+        intent = retry_intent(execution)
+        key = (reason, json.dumps(intent, sort_keys=True))
+        entry = counts.setdefault(key, {'intent': intent, 'reason_code': reason, 'attempts': 0,
+                                        'instruction': 'Do not retry this intent; choose an alternate tool or plan action.'})
+        entry['attempts'] += 1
+    return [entry for entry in counts.values() if entry['attempts'] >= 2]
+
+
 def runtime_state_frame(state: RuntimeState) -> dict:
     if state.active_turn_id is None:
         return {
@@ -343,7 +401,7 @@ def runtime_state_frame(state: RuntimeState) -> dict:
     turn = state.turns[state.active_turn_id]
     plan = state.plans.get(turn.plan_id) if turn.plan_id else None
     plan_frame = None
-    allowed_actions = []
+    allowed_actions = [{'action': name} for name in ('read', 'write', 'edit', 'bash')]
     blocker_ids = []
     if plan:
         revision = plan.revisions[-1]
@@ -371,7 +429,7 @@ def runtime_state_frame(state: RuntimeState) -> dict:
         allowed_actions.append({"action": "revise_plan"})
     else:
         allowed_actions.append({"action": "create_plan"})
-    return {
+    frame = {
         "state_version": state.state_version,
         "turn": {
             "id": turn.turn_id,
@@ -382,7 +440,23 @@ def runtime_state_frame(state: RuntimeState) -> dict:
         "plan": plan_frame,
         "allowed_actions": allowed_actions,
         "blockers": blocker_ids,
+        "retry_constraints": retry_constraints(state),
+        "successful_evidence": [
+            {'execution_id': f'exec_{index}', 'tool': item.tool_name, 'path': item.arguments.get('path')}
+            for index, item in enumerate(state.executions.values(), 1)
+            if item.status == ToolExecutionStatus.COMPLETED and item.tool_name != 'update_plan'
+            and item.result is not None and item.result.success
+        ][-10:],
     }
+    if turn.completion_block_count:
+        frame["completion_feedback"] = {
+            "attempts": turn.completion_block_count,
+            "blockers": [
+                {"code": item.code, "message": item.message, "ids": list(item.ids)}
+                for item in completion_blockers(state, turn.turn_id)
+            ],
+        }
+    return frame
 
 
 def runtime_prompt_projection(state: RuntimeState) -> str:

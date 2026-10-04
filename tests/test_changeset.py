@@ -44,10 +44,8 @@ class ChangeSetTests(unittest.TestCase):
 
     def test_rejects_denylisted_new_file_and_new_or_changed_symlink(self):
         (self.source / "target").write_text("ok")
-        (self.source / "link").symlink_to("target")
         self.snapshot()
         (self.paths.workspace / ".env").write_text("secret")
-        (self.paths.workspace / "link").unlink()
         (self.paths.workspace / "link").symlink_to("other")
         changes = build_changeset(self.paths)
         self.assertFalse(changes.approvable)

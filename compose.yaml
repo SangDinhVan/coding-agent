@@ -10,6 +10,8 @@ services:
       DOCKER_HOST: unix:///var/run/docker.sock
       WORKSPACE: /workspace
       STATE_ROOT: /state
+      TRACE_DISPLAY_ROOT: .llm-traces
+      SANDBOX_IMAGE: ${SANDBOX_IMAGE:?Run python3 scripts/setup.py first}
     volumes:
       - .:/workspace
       - coding-agent-state:/state

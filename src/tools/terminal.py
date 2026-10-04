@@ -11,9 +11,16 @@ class BashTool(BaseTool):
     replay_policy = ReplayPolicy.MANUAL
     name = "bash"
 
+    def authorize_runtime(self, action, binding):
+        if self.sandbox is None:
+            raise RuntimeError('sandbox unavailable')
+        self.sandbox.authorize_exec_action(action, binding)
+        self._execution_id = action.execution_id
+
     def __init__(self, sandbox=None):
         self.sandbox = sandbox
-        self.description = f"Run shell commands in the isolated offline sandbox; default timeout is {DEFAULT_TIMEOUT_SECONDS}s."
+        self.description = (f"Run shell commands against a read-only workspace snapshot in the isolated offline sandbox; "
+                            f"default timeout is {DEFAULT_TIMEOUT_SECONDS}s. Use write/edit to change project files.")
         self.parameters = {
             "type": "object",
             "properties": {
@@ -45,7 +52,7 @@ class BashTool(BaseTool):
         if verification_kind is not None:
             executed_command = f"set -euo pipefail\n{command}"
         try:
-            request = ExecRequest("tool", executed_command, SandboxPath(relative_cwd), DEFAULT_TIMEOUT_SECONDS)
+            request = ExecRequest(getattr(self, '_execution_id', ''), executed_command, SandboxPath(relative_cwd), DEFAULT_TIMEOUT_SECONDS)
         except ValueError as error:
             return ToolResult(str(error), f"Invalid sandbox command: {error}", False)
         result = self.sandbox.exec(request)
@@ -57,6 +64,10 @@ class BashTool(BaseTool):
             "image_digest": result.image_digest,
             "violation_status": result.violation_status.value,
             "truncated": result.truncated,
+            'process_outcome': result.process_outcome,
+            'enforcement_observation': result.enforcement_observation,
+            'effect_state': result.effect_state,
+            'quiescent': result.quiescent,
             "verification_kind": verification_kind or "unclassified",
             "passed": result.success if verification_kind is not None else None,
         }

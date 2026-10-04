@@ -1,151 +1,195 @@
-# Chạy Coding Agent bằng Docker Compose
+# Run the safe coding agent
 
-Chạy các lệnh dưới đây tại thư mục gốc repository (nơi có `compose.yaml`).
-Ứng dụng cần Docker Compose, Docker daemon đang chạy và cgroups v2. Sandbox
-chấp nhận Docker Engine **rootless** trên Linux hoặc Docker Desktop chạy
-**Linux containers** trên Windows/macOS. Docker Engine rootful chạy trực tiếp
-trên Linux bị ứng dụng từ chối. Docker Desktop được chấp nhận cho đồ án nhưng
-không tương đương bảo đảm an toàn của rootless Docker.
+The supported safety profile requires Linux rootless Docker and cgroups v2.
+It admits an independent SHADOW copy of the selected source. Tool containers never
+mount the original project. After a permitted write/edit, the controller publishes
+that exact file to the selected project. Writable shell input, external effects
+and network/package-fetch brokers are unavailable.
 
-## 1. Chuẩn bị Docker
+## Trusted setup
 
-### Linux: Docker Engine rootless
+Team members need Python >=3.10, Docker Compose, and an installed/running Linux
+rootless Docker daemon with cgroups v2. From a trusted checkout, run once:
 
-Nếu chưa cài rootless Docker, làm theo [hướng dẫn chính thức của Docker](https://docs.docker.com/engine/security/rootless/).
-Lệnh `dockerd-rootless-setuptool.sh install` là bước **cài đặt một lần**, không
-cần chạy mỗi khi mở ứng dụng. Trong terminal dùng để chạy Compose, kiểm tra:
-
-```bash
-docker context use rootless
-docker info --format 'security={{json .SecurityOptions}} cgroup={{.CgroupVersion}}'
-test -S "$XDG_RUNTIME_DIR/docker.sock"
+```sh
+python3 scripts/setup.py
 ```
 
-`security` phải có `rootless`, `cgroup` phải là `2`, và lệnh `test` phải thành
-công. Compose tự mount `$XDG_RUNTIME_DIR/docker.sock` vào container. Nếu socket
-rootless ở vị trí khác, đặt `DOCKER_SOCKET` khi chạy (xem mục xử lý lỗi).
+Setup finds a local rootless context, checks cgroups v2, builds the sandbox from
+the trusted sandbox-image/ directory, and writes its immutable image ID and
+actual socket path into .env. It creates .env from .env.example if needed and
+preserves existing provider settings. If it selects a different context, it
+makes that context Docker's default so subsequent Compose commands use the same
+daemon. It does not install or reconfigure the Docker daemon. Unsupported or
+unavailable daemons and failed builds leave .env untouched.
 
-### Windows/macOS: Docker Desktop
+Set API_KEY, MODEL and BASE_URL in your own .env. Do not share .env with teammates;
+each runs setup on their own machine. No shell exports or copied image IDs are
+needed. Run setup again after trusted sandbox helpers change. Build requires
+access to pinned base images and locked packages on the first run; execution
+containers still have network disabled.
 
-Khởi động Docker Desktop và dùng chế độ **Linux containers**. Trên Windows,
-chạy các lệnh từ PowerShell tại thư mục repository; trên macOS dùng Terminal.
-Kiểm tra daemon:
+Compose's control container has provider credentials and a daemon socket;
+children receive neither. Runtime startup does not build or pull sandbox images,
+and the controller verifies that the image's helpers match its trusted copies.
+Build/setup only from a trusted controller checkout. The source selected with
+--workspace is separate from the trusted controller; keep --state-root outside
+that source. Selected ordinary source is authorized for the model provider and
+local UI; private patterns and additive ignore exclusions remain in force.
+
+## Modes and CLI
+
+For Compose, save SANDBOX_IMAGE and optionally DOCKER_SOCKET in the controller
+.env once. Compose reads them automatically; no shell exports are needed.
+Use the rootless Docker context selected on the host. Select an approval mode
+when starting a new session and rebuild the controller to pick up source changes:
+
+```sh
+docker compose run --build --rm coding-agent --approval-mode ask_all
+docker compose run --build --rm coding-agent --approval-mode ask_on_escalation
+docker compose run --build --rm coding-agent --approval-mode auto_review
+```
+
+Exit the current session before testing another mode. Start a new session rather
+than resuming a legacy live session. The default is ask_on_escalation.
+
+```sh
+DOCKER_CONTEXT=rootless coding-agent --workspace /absolute/project \
+  --state-root /absolute/private-state --image sha256:<trusted-id> \
+  --approval-mode ask_on_escalation
+```
+
+- ask_all requests human approval for each new supported execution.
+- ask_on_escalation permits ordinary bounded file operations and recognized static read-only commands; REVIEW goes to a human.
+- auto_review uses the selected core model through an isolated request for recognized test commands with sealed project inputs. Commands that the normalizer cannot analyze still require human content review.
+- Protected project controls always need exact-content human approval. No mode grants an unsupported physical capability.
+- update_plan changes internal plan state. In ask_all it still asks for approval,
+  but its preview contains only the plan request; it never reads workspace files
+  or requests a filesystem grant.
+
+To test ask_all in this repository, use a normal request, for example:
 
 ```text
-docker info --format 'os={{.OperatingSystem}} cgroup={{.CgroupVersion}}'
+Create an HTML website selling milk tea.
 ```
 
-`os` phải nhận diện Docker Desktop và `cgroup` phải là `2`. Khi không có
-`XDG_RUNTIME_DIR`, Compose mount `/var/run/docker.sock` vào Linux container;
-không thay bằng Windows named pipe `\\.\pipe\docker_engine`.
+Choose 1 (allow) or 2 (deny) to decide immediately. Choose 3 (Note) to add an
+optional note, then return to the menu and choose 1 or 2. Successful writes
+appear immediately in the selected project; no copy/export step is needed.
+The approval preview and tool result show the saved destination. Bash input is read-only, so it cannot create
+HTML or modify project files. Workspace paths are supplied to the model without
+reading file contents. The normalizer recognizes simple `pwd`, `ls`, `find`,
+`grep`, `cat`, `head`, and `tail` commands with supported read-only options and
+workspace-relative inputs. These receive bounded facts. Content-reading commands
+screen their selected input files before execution; metadata-only commands do
+not read file contents. They do not scan unrelated files. Shell expansion,
+pipelines, redirection, unknown executables and
+effectful options still require review. Known test commands also require review:
+executing project code is not a static file check. Test and opaque shell input
+must pass a trusted disclosure preflight before approval or execution.
+If the full input contains possible secrets (including this
+repository's test canaries), exceeds the preview budget, or contains binary files,
+only that shell action is cancelled; the model can continue with read/write/edit.
+No raw preview reaches the model, UI, Reviewer, or journal. Use the clean demo in
+the manual test guide for shell approval tests. An actual secret-bearing read or
+output still blocks the session: exit and start a fresh session; do not resume it
+to clear its flags.
 
-Nếu chạy trong **WSL** thay vì PowerShell, hãy đảm bảo Docker Desktop đã bật
-WSL integration cho distro đó. Nếu WSL có `XDG_RUNTIME_DIR` riêng, đặt
-`DOCKER_SOCKET=/var/run/docker.sock` để Compose không chọn nhầm socket WSL.
+Simple tasks use file tools directly without a required plan. When a plan is
+useful, successful `read`, `write`, and `edit` execution IDs can complete
+evidence-required steps; reading a file can verify its contents without shell,
+but does not prove browser behavior. The state frame lists regular tools,
+successful evidence, and retry constraints. Two failures with the same reason
+and intent forbid further retries until meaningful progress; the model must
+choose an alternate tool. Repeatedly ignoring that guard fails the turn early.
 
-## 2. Cấu hình môi trường
+--host-policy accepts a trusted JSON file outside source. Supported keys are
+allowed_modes, default_mode, pinned_mode, profile_id, excluded_paths, human_gate_paths.
+Repo .agent-safety.json accepts only excluded_paths and human_gate_paths.
+Restrictions accumulate through journal replay; editing repo config cannot
+remove an accepted restriction. Headless never prompts:
 
-Tạo `.env` từ file mẫu:
-
-```bash
-# Linux, macOS hoặc WSL (chỉ tạo khi chưa có .env)
-if [ ! -f .env ]; then cp .env.example .env; fi
+```sh
+DOCKER_CONTEXT=rootless coding-agent --workspace /absolute/project \
+  --state-root /absolute/private-state --image sha256:<trusted-id> \
+  --headless --prompt 'Read main.py and describe it'
 ```
 
-```powershell
-# Windows PowerShell (chỉ tạo khi chưa có .env)
-if (-not (Test-Path .env)) { Copy-Item .env.example .env }
+Human-required actions in headless return human_approval_unavailable without
+running effects. Interactive approval/resume drains the pending batch before
+another model call. Approvals bind arguments, generation, image, environment,
+policy, security revision and effective mode, and are claimed once durably.
+
+## Read-only tests
+
+Each bash action receives a distinct sealed input copy mounted entirely RO.
+It has network none, non-root user, rootfs RO, no capabilities, no-new-privileges,
+cgroup CPU/memory/PID bounds, timeout/output bounds and /tmp byte/inode quotas.
+The controller destroys the whole action container and verifies absence before
+returning output. Namespace loopback remains possible. A cache-writing test
+fails on RO project input; this never silently enables RW. Python uses
+PYTHONDONTWRITEBYTECODE=1. Human sealed-input preview is bounded to 2 MiB of
+UTF-8 data; unsupported or oversized previews block approval presentation.
+
+## Review and export
+
+Configure an existing directory outside source and state, and explicitly grant
+the separate patch disclosure sink:
+
+```sh
+coding-agent --workspace /absolute/project --state-root /absolute/private-state \
+  --image sha256:<trusted-id> --export-root /absolute/patches --allow-patch-export
 ```
 
-Mở `.env` và điền giá trị thật cho cả `API_KEY`, `MODEL` và `BASE_URL` theo
-nhà cung cấp API bạn dùng. Không commit `.env` hoặc đưa API key vào lệnh chạy.
-Nếu `.env` đã tồn tại, chỉ chỉnh file đó, không cần sao chép lại.
+/changes stops the file adapter, verifies quiescence, seals the final generation
+and previews exact changes. /export review.patch prompts for the exact change
+set digest. Its broker follows no symlink parents or leaves and never overwrites
+an existing destination. Export root alone does not authorize disclosure.
+Text create/delete/modify, newline state and file modes are represented; binary,
+non-UTF-8, unsafe path names and empty-directory-only changes fail explicitly.
+New CLI sessions already publish permitted write/edit actions; /apply is unnecessary.
+Legacy sessions retain their private-only scope and still require patch export.
+An exported patch is not a certificate that project code is safe to run on the host.
 
-## 3. Chạy ứng dụng
+## Files in your project
 
-Lệnh giống nhau trên Linux, PowerShell và macOS:
+The selected --workspace is the publication destination. In the default Compose
+setup, /workspace is a bind mount of the current project folder. Starting a new
+session enables publication; legacy session metadata keeps its original scope.
+The controller copies only the exact authorized UTF-8 file, preserves its mode,
+checks the project root and parent identities, refuses links/protected paths,
+and rejects a changed before-image. A lock coordinates controller writers; external
+editors must not save the same file concurrently during the atomic write. This is
+per-file publication, not a transaction spanning an entire task. A failed/unknown
+publication quarantines the session for manual reconciliation; no success is reported.
+Deleting the sandbox does not undo files already saved in your project.
 
-```text
-docker compose run --build --rm coding-agent
-```
+## Unknown outcomes and disclosure
 
-Để tiếp tục phiên gần nhất:
+Traces are saved to `.llm-traces/<session>/<turn>.txt` in the selected project,
+outside the private sandbox, both with Compose and when running directly.
+The CLI prints the saved path after a completed turn. Each file includes model
+calls and `[runtime]` records with the tool, command or file path, working
+directory, hard policy decision (`allow`, `review`, `ask`, `deny`), reason,
+approval route, and Reviewer verdict when applicable. `phase: pre_effect`
+identifies the policy recheck immediately before execution. Traces are excluded
+from workspace snapshots and Docker builds, and pass the disclosure gate.
+Model requests use a finite 120-second timeout and up to two SDK retries for
+transient connection/timeout/rate-limit/server failures before a response starts.
+An interrupted response stream is not replayed automatically. Persistent timeout
+and connection failures are reported as model_timeout and model_connection_failed.
+Security flags and provenance survive journal replay, compaction and project
+memory. Main model, Reviewer, summary, memory, UI, audit text, trace and patch
+export all have pre-sink gates. Known secret exposure blocks them and further
+OS actions. Pattern screening cannot detect every encoded or unknown secret.
+Declassification is unavailable: flags remain monotonic.
 
-```text
-docker compose run --build --rm coding-agent resume --last
-```
+Unknown transport, cleanup or post-effect audit outcomes require manual
+reconciliation. Do not retry or export until reconciled. Safe startup refuses
+legacy host apply journals rather than restoring source automatically. /discard
+removes the sandbox, retaining published project files. Recovery evidence must match
+both the private file and published source state; conflicting source changes/backups
+are preserved by the internal legacy recovery API, which safe CLI does not expose.
 
-Gõ `exit` trong ứng dụng để thoát. Mỗi lần chạy, Compose build image điều
-khiển nếu cần; entrypoint bên trong container tiếp tục build image sandbox.
-
-## 4. Memory và context bền vững
-
-Các lệnh memory được xử lý trực tiếp trong REPL, không gọi model:
-
-```text
-/memory
-/remember <fact>
-/forget <id-or-fact>
-```
-
-- `/memory` in toàn bộ `PROJECT.md` của workspace hiện tại.
-- `/remember` thêm một fact đã chuẩn hóa; fact trùng không được ghi lại.
-- `/forget` xóa đúng một entry theo ID hoặc nội dung fact chính xác.
-- Lỗi input hoặc ghi file được in dưới dạng `Memory error: ...` và không làm
-  thay đổi file hợp lệ trước đó.
-
-Khi chạy bằng Compose, `--state-root` là `/state` trong volume
-`coding-agent-state`. Layout liên quan là:
-
-```text
-<state-root>/
-├── chats/<session-id>.jsonl
-├── checkpoints/<session-id>.json
-└── projects/<workspace-identity>/PROJECT.md
-```
-
-`PROJECT.md` chỉ chứa memory được user chủ động quản lý qua các lệnh trên;
-agent không tự gọi model để ghi memory sau mỗi turn. Memory này là thông tin
-tham khảo: instruction hiện tại, code/configuration, test, journal và runtime
-state luôn có độ ưu tiên cao hơn khi có xung đột.
-
-Checkpoint được tạo tự động khi context vượt token budget và được dùng lại khi
-resume đúng session. File checkpoint được ghi atomically. Checkpoint thiếu hoặc
-hỏng sẽ bị bỏ qua với warning và agent dựng context từ journal; lỗi tạo/lưu
-checkpoint được báo ra ngoài thay vì xóa, truncate hoặc sửa journal.
-
-## 5. Khi gặp lỗi Docker socket
-
-Kiểm tra container có nói chuyện được với daemon, **không khởi động agent**:
-
-```text
-docker compose run --build --rm --no-deps --entrypoint docker coding-agent info
-```
-
-Nếu báo `permission denied ... /var/run/docker.sock`:
-
-- Linux rootless: kiểm tra `docker context show` là `rootless` và socket trong
-  `$XDG_RUNTIME_DIR` tồn tại. Có thể chỉ định rõ socket:
-
-  ```bash
-  DOCKER_SOCKET="$XDG_RUNTIME_DIR/docker.sock" docker compose run --build --rm coding-agent
-  ```
-
-- Windows chạy trong WSL: nếu có `XDG_RUNTIME_DIR` riêng, dùng:
-
-  ```bash
-  DOCKER_SOCKET=/var/run/docker.sock docker compose run --build --rm coding-agent
-  ```
-
-- Windows/macOS Docker Desktop: kiểm tra đang dùng Linux containers. Nếu tổ
-  chức bật [Enhanced Container Isolation](https://docs.docker.com/enterprise/security/hardened-desktop/enhanced-container-isolation/),
-  chính sách đó có thể chặn mount Docker socket; cần quản trị viên cấp ngoại
-  lệ phù hợp.
-
-Cảnh báo `legacy builder is deprecated` không phải lỗi quyền socket và không
-phải nguyên nhân khiến lệnh trên dừng.
-
-Nếu trên Windows báo `exec /usr/local/bin/coding-agent-entrypoint: no such file
-or directory` ngay sau khi tạo container, hãy cập nhật repository rồi chạy lại
-`docker compose run --build --rm coding-agent`. Lỗi này có thể do script được
-checkout với dòng CRLF; Dockerfile hiện chuẩn hóa LF khi build image.
+See [acceptance evidence](superpowers/safety-acceptance.md) and
+[operations](sandbox_v1_operations.md).

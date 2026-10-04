@@ -5,9 +5,10 @@ from __future__ import annotations
 import fcntl
 import os
 import re
+import json
 import tempfile
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from uuid import uuid4
 
@@ -48,11 +49,16 @@ _ENTRY = re.compile(r"^- \[([0-9a-f]{8})\] (.+)$")
 class MemoryEntry:
     memory_id: str
     fact: str
+    provenance_generation_ids: tuple[str, ...] = ()
+    security_state_version: int = 0
 
 
 class MemoryManager:
     def __init__(self, project_md_path: str | Path):
         self.project_md_path = Path(project_md_path)
+        self.disclosure_check = None
+        self.get_security_state = None
+        self.provenance_path = self.project_md_path.with_suffix('.provenance.json')
         self._ensure_file_exists()
 
     def _ensure_file_exists(self) -> None:
@@ -64,17 +70,64 @@ class MemoryManager:
             self.project_md_path.chmod(0o600)
 
     def read(self) -> str:
-        return self.project_md_path.read_text(encoding="utf-8")
+        text = self.project_md_path.read_text(encoding="utf-8")
+        return self.disclosure_check(text, 'memory') if self.disclosure_check else text
 
     def entries(self) -> tuple[MemoryEntry, ...]:
         text = self.read()
         start, end = self._section_bounds(text)
         entries = []
+        metadata = self._provenance()
         for line in text[start:end].splitlines():
             match = _ENTRY.fullmatch(line)
             if match:
-                entries.append(MemoryEntry(match.group(1), match.group(2)))
+                annotation = metadata.get(match.group(1), {})
+                entries.append(MemoryEntry(match.group(1), match.group(2), tuple(annotation.get('provenance_generation_ids', ())), annotation.get('security_state_version', 0)))
         return tuple(entries)
+
+    def _provenance(self):
+        if not self.provenance_path.exists():
+            return {}
+        with self.provenance_path.open('rb') as file:
+            raw = file.read(1024**2 + 1)
+        if len(raw) > 1024**2:
+            raise ValueError('memory_provenance_budget')
+        data = json.loads(raw)
+        from runtime.models import SecurityState
+        if not isinstance(data, dict):
+            raise ValueError('invalid_memory_provenance')
+        for record in data.values():
+            if not isinstance(record, dict):
+                raise ValueError('invalid_memory_provenance')
+            SecurityState().merge(record)
+        return data
+
+    def security_annotations(self):
+        from runtime.models import SecurityState
+        state = SecurityState()
+        for record in self._provenance().values():
+            state.merge(record)
+        return asdict(state)
+
+    def _save_provenance(self, entries):
+        if not self.get_security_state:
+            return
+        data = self._provenance()
+        annotation = asdict(self.get_security_state())
+        for entry in entries:
+            data.setdefault(entry.memory_id, annotation)
+        encoded = json.dumps(data, sort_keys=True)
+        if len(encoded.encode()) > 1024**2:
+            raise ValueError('memory_provenance_budget')
+        with tempfile.NamedTemporaryFile('w', dir=self.provenance_path.parent, delete=False) as stream:
+            temporary = Path(stream.name)
+            try:
+                stream.write(encoded)
+                stream.flush()
+                os.fsync(stream.fileno())
+                os.replace(temporary, self.provenance_path)
+            finally:
+                temporary.unlink(missing_ok=True)
 
     def remember(self, fact: str) -> tuple[MemoryEntry, bool]:
         normalized = self._normalize(fact)
@@ -90,7 +143,8 @@ class MemoryManager:
             memory_id = uuid4().hex[:8]
             while memory_id in used_ids:
                 memory_id = uuid4().hex[:8]
-            entry = MemoryEntry(memory_id, normalized)
+            state = self.get_security_state() if self.get_security_state else None
+            entry = MemoryEntry(memory_id, normalized, state.provenance_generation_ids if state else (), state.security_state_version if state else 0)
             entries.append(entry)
             self._write_entries(entries)
             return entry, True
@@ -151,9 +205,15 @@ class MemoryManager:
         if entries:
             body += "\n".join(f"- [{entry.memory_id}] {entry.fact}" for entry in entries) + "\n"
         body += "\n"
-        self._write(text[:start] + body + text[end:].lstrip("\n"))
+        full_text = text[:start] + body + text[end:].lstrip("\n")
+        if self.disclosure_check:
+            self.disclosure_check(full_text, 'memory')
+        self._save_provenance(entries)
+        self._write(full_text)
 
     def _write(self, text: str) -> None:
+        if self.disclosure_check:
+            self.disclosure_check(text, 'memory')
         self.project_md_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.project_md_path.parent.chmod(0o700)
         temporary_path = None

@@ -445,8 +445,10 @@ intent. Nó không trực tiếp sửa dataclass `PlanStep`.
   turn ban đầu ở mode `optional`.
 - Step `required=false` không bắt buộc hoàn thành để pass completion guard.
 
-`allowed_actions` trong state frame và `update_plan` schema hiện tập trung vào
-**plan intents**, không phải danh sách whitelist cho mọi filesystem/bash call.
+`allowed_actions` trong state frame gồm `read/write/edit/bash` và các plan intent
+hợp lệ. `update_plan` schema chỉ chứa plan intent. Hard policy vẫn kiểm tra
+quyền của từng tool call. `successful_evidence` gợi ý các execution thành công;
+`retry_constraints` cấm lặp cùng lý do và intent sau hai lần không có tiến triển.
 
 ### 9.2. Lifecycle của plan step
 
@@ -479,10 +481,12 @@ Caller có API `skip_plan_step()` với reason; REPL hiện không có command r
 | Completion policy | Dữ liệu cần gửi | Runtime kiểm tra |
 |---|---|---|
 | `self_attested` | `note` không rỗng. | Có lời xác nhận việc hoàn tất. |
-| `evidence_required` | `evidence_execution_ids`. | Reference resolve được tới execution `completed` cùng session. |
+| `evidence_required` | `evidence_execution_ids`. | Reference resolve được tới execution `completed`, result thành công, cùng session và không phải `update_plan`. |
 
 Model có thể dùng alias `exec_2`; runtime resolve alias thành execution UUID
 để lưu evidence. Schema gợi ý các successful execution ngoài `update_plan`.
+`write/edit/read` đều là evidence hợp lệ: write chứng minh đã lưu file, read
+kiểm tra nội dung mà không cần shell; read không chứng minh hành vi trình duyệt.
 
 Giới hạn hiện tại: evidence check xác nhận execution thành công trong cùng
 session; nó không tự chứng minh execution đó liên quan đúng task, thuộc đúng
@@ -680,17 +684,19 @@ Process chết đột ngột có thể chưa kịp ghi block đang chạy.
   chats/<session-id>.jsonl                 journal
   checkpoints/<session-id>.json            checkpoint
   projects/<workspace-identity>/PROJECT.md project memory
-  traces/<session-id>/<turn-id>.txt         trace đang chạy hoặc đang pause
   sandboxes/<session-id>/metadata.json      sandbox metadata
 
 <workspace>/
-  .llm-traces/<session-id>/<turn-id>.txt     trace được xuất khi turn terminal
+  .llm-traces/<session-id>/<turn-id>.txt     trace được ghi trực tiếp trong turn
 ```
 
-`_run_with_trace()` xuất trace sang workspace khi `active_turn_id` không còn
-là turn đó, gồm completed/interrupted/failed; **có file trace ở workspace
-không đồng nghĩa turn completed**. Khi pause chờ approval, trace thường còn
-trong state root. Resume mở lại cùng file và tiếp tục đếm call.
+`_run_with_trace()` ghi trace trực tiếp vào `.llm-traces` của project, bên ngoài
+private sandbox, kể cả khi pause chờ approval. CLI in đường dẫn khi turn kết
+thúc, gồm completed/interrupted/failed; **có file trace ở workspace không đồng
+nghĩa turn completed**. Resume mở lại cùng file và tiếp tục đếm call.
+Các dòng `[runtime]` ghi command/path/cwd, quyết định và lý do của hard policy,
+approval route và verdict của reviewer. `phase: pre_effect` là lần kiểm tra lại
+ngay trước khi thực thi; nội dung trace vẫn qua disclosure gate.
 
 State root khi chạy trực tiếp mặc định là
 `$XDG_STATE_HOME/sang-coding-agent`, hoặc

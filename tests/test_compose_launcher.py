@@ -9,7 +9,7 @@ ENTRYPOINT = ROOT / "docker-entrypoint.sh"
 
 
 class ComposeLauncherTests(unittest.TestCase):
-    def test_launcher_builds_sandbox_and_starts_agent_with_immutable_id(self):
+    def test_pinned_image_no_auto_build(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             binary = root / "bin"
@@ -33,6 +33,7 @@ class ComposeLauncherTests(unittest.TestCase):
                 "PATH": f"{binary}:{os.environ['PATH']}",
                 "CALL_LOG": str(log),
                 "IMAGE_ID": image_id,
+                'SANDBOX_IMAGE': image_id,
                 "WORKSPACE": str(workspace),
                 "STATE_ROOT": str(state),
                 "CONTROL_CONTAINER_ID": "control-container-id",
@@ -43,11 +44,10 @@ class ComposeLauncherTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(log.read_text(encoding="utf-8").splitlines(), [
-                f"docker:build --quiet --tag sang-coding-agent-sandbox:local {workspace}/sandbox-image",
                 f"agent:--workspace {workspace} --state-root {state} --image {image_id} --control-container-id control-container-id resume --last",
             ])
 
-    def test_launcher_rejects_non_immutable_build_result(self):
+    def test_launcher_rejects_missing_pinned_image(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             binary = root / "bin"
@@ -58,11 +58,11 @@ class ComposeLauncherTests(unittest.TestCase):
             (workspace / "sandbox-image").mkdir(parents=True)
             result = subprocess.run(
                 [str(ENTRYPOINT)],
-                env=os.environ | {"PATH": f"{binary}:{os.environ['PATH']}", "WORKSPACE": str(workspace)},
+                env=os.environ | {"PATH": f"{binary}:{os.environ['PATH']}", "WORKSPACE": str(workspace), 'SANDBOX_IMAGE': ''},
                 capture_output=True, text=True,
             )
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("immutable image ID", result.stderr)
+            self.assertIn('SANDBOX_IMAGE', result.stderr)
 
 
     def test_control_and_sandbox_dockerfiles_include_required_runtime_tools(self):

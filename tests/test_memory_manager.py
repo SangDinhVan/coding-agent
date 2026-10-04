@@ -9,6 +9,17 @@ from memory.manager import MemoryManager
 
 
 class MemoryManagerTests(unittest.TestCase):
+    def test_memory_fact_carries_provenance_and_security_revision(self):
+        from runtime.models import SecurityState
+        with tempfile.TemporaryDirectory() as folder:
+            manager = MemoryManager(Path(folder) / 'PROJECT.md')
+            manager.get_security_state = lambda: SecurityState(untrusted_content_seen=True, injection_flags=('instruction_pattern',), provenance_generation_ids=('g1',), security_state_version=3)
+            entry, _ = manager.remember('observed project fact')
+            restored = MemoryManager(manager.project_md_path).entries()[0]
+            self.assertEqual(restored.provenance_generation_ids, ('g1',))
+            self.assertEqual(restored.security_state_version, 3)
+            self.assertTrue(manager.security_annotations()['untrusted_content_seen'])
+
     def manager(self, directory: str, name: str = "PROJECT.md") -> MemoryManager:
         return MemoryManager(Path(directory) / name)
 

@@ -1,3 +1,4 @@
+from tests.fakes import trusted_agent
 import tempfile
 import json
 import unittest
@@ -44,7 +45,7 @@ def make_checkpoint(session_id: str, covers: int, max_seq: int | None = None):
 
 class AgentLoopCharacterizationTests(unittest.TestCase):
     def agent(self, directory: str, tool=None) -> Agent:
-        agent = Agent(
+        agent = trusted_agent(
             str(Path(directory) / "events.jsonl"),
             workdir=directory,
             tool_registry=FakeRegistry(tool),
@@ -64,12 +65,13 @@ class AgentLoopCharacterizationTests(unittest.TestCase):
             self.assertEqual([m["role"] for m in agent.event_store.to_messages()], ["user", "assistant"])
 
     def test_completed_turn_saves_llm_trace_and_prints_its_path(self):
-        with tempfile.TemporaryDirectory() as directory:
-            agent = self.agent(directory)
+        with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory() as state:
+            agent = trusted_agent(str(Path(state) / 'events.jsonl'), workdir=directory, state_root=state)
+            self.addCleanup(agent.close)
             client = unittest.mock.Mock()
 
             def respond(**kwargs):
-                self.assertFalse((Path(directory) / ".llm-traces").exists())
+                self.assertTrue((Path(directory) / ".llm-traces").exists())
                 return iter(stream_text("done"))
 
             client.chat.completions.create.side_effect = respond
@@ -77,28 +79,41 @@ class AgentLoopCharacterizationTests(unittest.TestCase):
             with patch("model.llm.OpenAI", return_value=client), patch("builtins.print") as output:
                 self.assertEqual(agent.run_turn("trace this prompt"), "done")
 
-            traces = list((Path(directory) / ".llm-traces" / "events").glob("*.txt"))
+            self.assertFalse((agent.state_root / 'traces').exists())
+            traces = list((Path(directory) / '.llm-traces' / 'events').glob('*.txt'))
             self.assertEqual(len(traces), 1)
             trace = traces[0].read_text(encoding="utf-8")
             self.assertIn("lần gọi thứ: 1", trace)
             self.assertIn('"content": "trace this prompt"', trace)
             self.assertTrue(any(str(traces[0]) in str(call) for call in output.call_args_list))
 
+    def test_compose_trace_prints_host_destination(self):
+        with tempfile.TemporaryDirectory() as directory:
+            agent = self.agent(directory)
+            with patch.dict('os.environ', {'TRACE_DISPLAY_ROOT': '.llm-traces'}), patch(
+                'agent.loop.llm.complete', return_value=stream_text('done')
+            ), patch('builtins.print') as output:
+                agent.run_turn('goal')
+            turn_id = agent.turn_state.turn_id
+            expected = f'[trace] saved: .llm-traces/events/{turn_id}.txt'
+            self.assertTrue(any(call.args == (expected,) for call in output.call_args_list))
+
     def test_project_memory_is_isolated_by_workspace_identity(self):
         with tempfile.TemporaryDirectory() as state, tempfile.TemporaryDirectory() as workspace:
-            first = Agent(
+            first = trusted_agent(
                 str(Path(state) / "first.jsonl"), workdir=workspace,
                 state_root=state, workspace_identity="first",
             )
-            second = Agent(
+            second = trusted_agent(
                 str(Path(state) / "second.jsonl"), workdir=workspace,
                 state_root=state, workspace_identity="second",
             )
             self.addCleanup(first.close)
             self.addCleanup(second.close)
             first.memory_manager.remember("Only first workspace knows this.")
-            self.assertIn("Only first workspace knows this.", first._build_system_message()["content"])
-            self.assertNotIn("Only first workspace knows this.", second._build_system_message()["content"])
+            self.assertIn("Only first workspace knows this.", str(first._build_context()))
+            self.assertNotIn("Only first workspace knows this.", str(second._build_context()))
+            self.assertNotIn('Only first workspace knows this.', first._build_system_message()['content'])
 
     def test_tool_result_is_sent_back_before_final_response(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -116,6 +131,8 @@ class AgentLoopCharacterizationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             tool = FakeTool()
             tool.name = "write"
+            from tools.filesystem import WriteTool
+            tool.parameters = WriteTool.parameters
             agent = self.agent(directory, tool)
             body = "x" * 12_000
             calls = 0
@@ -172,14 +189,14 @@ class AgentLoopCharacterizationTests(unittest.TestCase):
             repeated = stream_tool_call(
                 "call-1",
                 "update_plan",
-                '{"action":"complete_step","step_id":"missing","note":"done"}',
+                '{"action":"revise_plan","reason":"same","patches":[{"step_id":"step_1","task":"work"}]}',
             )
             responses = [
                 stream_tool_call("create", "update_plan", '{"action":"create_plan","steps":[{"task":"work"}]}'),
                 repeated,
                 stream_tool_call(
                     "call-2", "update_plan",
-                    '{"action":"complete_step","step_id":"missing","note":"done"}',
+                    '{"action":"revise_plan","reason":"same","patches":[{"step_id":"step_1","task":"work"}]}',
                 ),
             ]
 
@@ -248,10 +265,25 @@ class DurableTurnLifecycleTests(AgentLoopCharacterizationTests):
         with tempfile.TemporaryDirectory() as directory:
             agent = self.agent(directory)
             with patch("agent.loop.llm.complete", side_effect=RuntimeError("offline")):
-                with self.assertRaisesRegex(RuntimeError, "offline"):
+                with self.assertRaisesRegex(RuntimeError, "model_request_failed"):
                     agent.run_turn("goal")
             self.assertEqual(agent.turn_state.status.value, "failed")
             self.assertEqual(self.event_types(agent)[-1], "TurnFailed")
+
+    def test_provider_timeout_has_specific_safe_error_in_every_mode(self):
+        import httpx
+        from openai import APITimeoutError
+        from runtime.safety import SafetyConfig
+        for mode in ('ask_all', 'ask_on_escalation', 'auto_review'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                agent = self.agent(directory)
+                agent.safety_config = SafetyConfig(approval_mode=mode)
+                error = APITimeoutError(request=httpx.Request('POST', 'https://example.test/v1'))
+                with patch('agent.loop.llm.complete', side_effect=error):
+                    with self.assertRaisesRegex(RuntimeError, 'model_timeout'):
+                        agent.run_turn('goal')
+                self.assertEqual(agent.turn_state.error.category, 'model_timeout')
+                self.assertFalse(agent.runtime_state.security_state.secret_exposure_detected)
 
     def test_stream_interrupt_records_interrupted_without_final_message(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -274,7 +306,7 @@ class SandboxAgentWiringTests(unittest.TestCase):
             tool_registry.schemas.return_value = []
             tool = FakeTool()
             tool_registry.get.return_value = tool
-            agent = Agent(str(Path(directory) / "events.jsonl"), workdir=directory, sandbox=sandbox, tool_registry=tool_registry)
+            agent = trusted_agent(str(Path(directory) / "events.jsonl"), workdir=directory, sandbox=sandbox, tool_registry=tool_registry)
             with patch("agent.loop.llm.complete", return_value=stream_text("done")):
                 agent.run_turn("goal")
             agent.close()
@@ -303,12 +335,12 @@ class AgentFinalizationTests(unittest.TestCase):
         sandbox.backend.image = "image@sha256:" + "a" * 64
         sandbox.source_workspace = Path(directory.name)
         sandbox.paths = unittest.mock.MagicMock()
-        sandbox.prepare_changes.return_value = unittest.mock.MagicMock(
-            change_set_hash="abc", approvable=True,
-        )
+        from sandbox.models import ChangeSet
+        from sandbox.changes import _hash, _canonical
+        sandbox.prepare_changes.return_value = ChangeSet((), (), _hash(_canonical((), (), 'g')), 'g', True)
         tool_registry = unittest.mock.MagicMock()
         tool_registry.schemas.return_value = []
-        agent = Agent(
+        agent = trusted_agent(
             str(Path(directory.name) / "events.jsonl"),
             workdir=directory.name,
             sandbox=sandbox,
@@ -325,7 +357,7 @@ class AgentFinalizationTests(unittest.TestCase):
         restored = unittest.mock.MagicMock(change_set_hash="abc", approvable=True)
         agent.event_store.close()
         with patch("agent.loop.load_changeset", return_value=restored) as load:
-            replacement = Agent(
+            replacement = trusted_agent(
                 str(agent.event_store.path),
                 workdir=str(sandbox.source_workspace),
                 sandbox=sandbox,
@@ -341,26 +373,11 @@ class AgentFinalizationTests(unittest.TestCase):
         self.assertIs(agent.last_changes, changes)
         sandbox.prepare_changes.assert_called_once_with()
 
-    def test_apply_uses_exact_remembered_set_then_destroys(self):
-        from sandbox.models import ApplyResult
-
-        agent, sandbox = self.agent()
-        changes = agent.prepare_changes()
-        expected = ApplyResult(True, "abc", message="applied")
-        with patch("agent.loop.apply_changeset", return_value=expected) as apply:
-            result = agent.apply_changes("abc", "reviewed")
-        self.assertIs(result, expected)
-        apply.assert_called_once_with(
-            sandbox.paths, sandbox.source_workspace, changes, "abc", "reviewed",
-        )
-        sandbox.destroy.assert_called_once_with("applied")
-
-    def test_failed_apply_preserves_sandbox_for_recovery(self):
+    def test_safe_apply_is_unavailable(self):
         agent, sandbox = self.agent()
         agent.prepare_changes()
-        with patch("agent.loop.apply_changeset", side_effect=RuntimeError("conflict")):
-            with self.assertRaisesRegex(RuntimeError, "conflict"):
-                agent.apply_changes("abc", "reviewed")
+        with self.assertRaisesRegex(RuntimeError, 'publication_unavailable'):
+            agent.apply_changes('abc', 'reviewed')
         sandbox.destroy.assert_not_called()
 
     def test_discard_destroys_without_preparing_changes(self):
@@ -373,7 +390,7 @@ class AgentFinalizationTests(unittest.TestCase):
 class DurableContextTests(unittest.TestCase):
     def test_system_message_marks_project_memory_advisory_and_lower_priority(self):
         with tempfile.TemporaryDirectory() as directory:
-            agent = Agent(str(Path(directory) / "session.jsonl"), workdir=directory)
+            agent = trusted_agent(str(Path(directory) / "session.jsonl"), workdir=directory)
             self.addCleanup(agent.close)
             content = agent._build_system_message()["content"].lower()
             for phrase in ("advisory", "instructions", "repository", "tests", "journal", "runtime"):
@@ -388,7 +405,7 @@ class DurableContextTests(unittest.TestCase):
                 store.append("user", "new user")
             saved = make_checkpoint("session", covers=2, max_seq=3)
             CheckpointStore(checkpoint_path(state, "session")).save(saved)
-            agent = Agent(
+            agent = trusted_agent(
                 str(events_path), workdir=workspace,
                 state_root=state, workspace_identity="workspace",
             )
@@ -396,13 +413,13 @@ class DurableContextTests(unittest.TestCase):
             context = agent._build_context()
             self.assertEqual(context[0]["role"], "system")
             self.assertIn("advisory", context[0]["content"].lower())
-            self.assertEqual(context[1], saved.to_message())
-            self.assertEqual(context[2:], [{"role": "user", "content": "new user"}])
+            self.assertEqual(context[2], saved.to_message())
+            self.assertEqual(context[3:], [{"role": "user", "content": "new user"}])
 
     def test_below_budget_context_creates_no_checkpoint_or_event(self):
         with tempfile.TemporaryDirectory() as state, tempfile.TemporaryDirectory() as workspace:
             events_path = Path(state) / "session.jsonl"
-            agent = Agent(
+            agent = trusted_agent(
                 str(events_path), workdir=workspace,
                 state_root=state, workspace_identity="workspace",
             )
@@ -418,7 +435,7 @@ class DurableContextTests(unittest.TestCase):
     def test_successful_compaction_is_saved_and_measured_before_main_model_call(self):
         with tempfile.TemporaryDirectory() as state, tempfile.TemporaryDirectory() as workspace:
             events_path = Path(state) / "session.jsonl"
-            agent = Agent(
+            agent = trusted_agent(
                 str(events_path), workdir=workspace,
                 state_root=state, workspace_identity="workspace",
                 tool_registry=FakeRegistry(),
@@ -471,7 +488,7 @@ class DurableContextTests(unittest.TestCase):
             path.parent.mkdir(parents=True)
             path.write_text("{bad", encoding="utf-8")
             with patch("builtins.print") as output:
-                agent = Agent(
+                agent = trusted_agent(
                     str(events_path), workdir=workspace,
                     state_root=state, workspace_identity="workspace",
                 )
@@ -490,7 +507,7 @@ class DurableContextTests(unittest.TestCase):
                 make_checkpoint("other", covers=1, max_seq=1)
             )
             with patch("builtins.print"):
-                agent = Agent(
+                agent = trusted_agent(
                     str(events_path), workdir=workspace,
                     state_root=state, workspace_identity="workspace",
                 )

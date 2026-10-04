@@ -61,7 +61,8 @@ class UpdatePlanTool(BaseTool):
                 f"exec_{index}" for index, execution in enumerate(state.executions.values(), 1)
                 if execution.status == ToolExecutionStatus.COMPLETED
                 and execution.tool_name != "update_plan"
-            ][-10:]
+                and execution.result is not None and execution.result.success
+            ]
             revision = plan.revisions[-1]
             for step in revision.steps:
                 if step.status in {PlanStepStatus.COMPLETED, PlanStepStatus.SKIPPED}:
@@ -135,6 +136,10 @@ class UpdatePlanTool(BaseTool):
 
     def execute_runtime(self, execution_id: str, turn_id: str, **kwargs) -> ToolResult:
         return self.apply_action(execution_id=execution_id, turn_id=turn_id, **kwargs)
+
+    def validate(self, kwargs):
+        # The executor validates the state-dependent schema before this runtime call.
+        return None if isinstance(kwargs, dict) and isinstance(kwargs.get('action'), str) else 'invalid plan action'
 
     def execute(self, **kwargs) -> ToolResult:
         return ToolResult("Runtime context is required", "Error: runtime context is required", False)

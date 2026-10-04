@@ -1,3 +1,5 @@
+from tests.fakes import trusted_agent
+from tests.fakes import trusted_executor
 import tempfile
 import unittest
 from pathlib import Path
@@ -54,7 +56,7 @@ class RecoveryTests(unittest.TestCase):
     def test_crash_after_started_requires_recovery_and_completed_never_reexecutes(self):
         store = self.store()
         tool = FakeTool(error=SystemExit(2))
-        executor = ToolExecutor(store, get_tool=lambda name: tool)
+        executor = trusted_executor(store, get_tool=lambda name: tool)
         execution_id = executor.request_batch([call("c", "fake", "{}")], "t1")[0]
         with self.assertRaises(SystemExit):
             executor.execute(execution_id)
@@ -63,7 +65,7 @@ class RecoveryTests(unittest.TestCase):
         self.addCleanup(reopened.close)
         state = replay(reopened.read_all(), current_runtime_instance_id="r2")
         self.assertEqual(state.executions[execution_id].status, ToolExecutionStatus.RECOVERY_REQUIRED)
-        retry_executor = ToolExecutor(reopened, get_tool=lambda name: tool)
+        retry_executor = trusted_executor(reopened, get_tool=lambda name: tool)
         result = retry_executor.resolve_recovery(execution_id, RecoveryDecision.COMPLETED, "verified externally")
         self.assertTrue(result.success)
         self.assertEqual(tool.calls, 1)
@@ -74,7 +76,7 @@ class RecoveryTests(unittest.TestCase):
             "tool_call_id": "c", "tool_name": "bash", "arguments": {"command": "echo x"}, "replay_policy": "manual"
         }, turn_id="t")
         store.append_event("ToolStarted", "tool_execution", "x", {}, turn_id="t")
-        executor = ToolExecutor(store, get_tool=lambda name: BashTool())
+        executor = trusted_executor(store, get_tool=lambda name: BashTool())
         with self.assertRaisesRegex(ValueError, "manual"):
             executor.resolve_recovery("x", RecoveryDecision.RETRY, "try again")
 
@@ -96,18 +98,18 @@ class RecoveryTests(unittest.TestCase):
         }, turn_id="t")
         store.append_event("ToolStarted", "tool_execution", "x", {"recovery_metadata": metadata}, turn_id="t")
         tool = ReconcilableTool()
-        executor = ToolExecutor(store, get_tool=lambda name: tool)
+        executor = trusted_executor(store, get_tool=lambda name: tool)
         with patch.object(tool, "execute", side_effect=AssertionError("must not execute")):
             result = executor.resolve_recovery("x", RecoveryDecision.COMPLETED, "hash matched")
         self.assertTrue(result.success)
         self.assertEqual(tool.fingerprints, [metadata | {"_started_runtime_instance_id": "r1"}])
 
     def test_resume_active_turn_does_not_duplicate_user_message(self):
-        first = Agent(str(self.path), workdir=self.directory.name)
+        first = trusted_agent(str(self.path), workdir=self.directory.name)
         first.event_store.append("user", "goal", turn_id="t1")
         first._event("TurnStarted", "turn", "t1", {"goal": "goal", "plan_mode": "optional"}, turn_id="t1")
         first.close()
-        resumed = Agent(str(self.path), workdir=self.directory.name)
+        resumed = trusted_agent(str(self.path), workdir=self.directory.name)
         self.addCleanup(resumed.close)
         with patch("agent.loop.llm.complete", return_value=stream_text("done")):
             self.assertEqual(resumed.resume_active_turn(), "done")
@@ -132,7 +134,7 @@ if __name__ == "__main__":
 class ApprovalProgressTests(RecoveryTests):
     def test_waiting_approval_blocks_model_progress(self):
         fake = FakeTool()
-        agent = Agent(
+        agent = trusted_agent(
             str(self.path),
             workdir=self.directory.name,
             policy=lambda execution: "ask",
@@ -149,7 +151,7 @@ class ApprovalProgressTests(RecoveryTests):
 class BatchResumeTests(RecoveryTests):
     def test_resume_drains_pending_batch_before_model_progress(self):
         fake = FakeTool()
-        agent = Agent(
+        agent = trusted_agent(
             str(self.path), workdir=self.directory.name,
             policy=lambda execution: "ask" if execution.tool_call_id == "c1" else "allow",
             approval_handler=None,
@@ -176,12 +178,12 @@ class BatchResumeTests(RecoveryTests):
         self.assertEqual(tool_messages[1]["content"], "compact-ok\nExecution ID: exec_2")
 
     def test_persisted_final_completes_without_model_call(self):
-        first = Agent(str(self.path), workdir=self.directory.name)
+        first = trusted_agent(str(self.path), workdir=self.directory.name)
         first.event_store.append("user", "goal", turn_id="t1")
         first._event("TurnStarted", "turn", "t1", {"goal": "goal", "plan_mode": "optional"}, turn_id="t1")
         first.event_store.append("assistant", "already final", turn_id="t1", final=True)
         first.close()
-        resumed = Agent(str(self.path), workdir=self.directory.name)
+        resumed = trusted_agent(str(self.path), workdir=self.directory.name)
         self.addCleanup(resumed.close)
         with patch("agent.loop.llm.complete") as complete:
             self.assertEqual(resumed.resume_active_turn(), "already final")
